@@ -1,10 +1,13 @@
 OPENAI_API_KEY=`cat ~/.openai`
 PIPELINES_DIR="dev_pipelines"
-PIPELINES_REQUIREMENTS_PATH=false
+RESET_PIPELINES_DIR=true
+PIPELINES_URLS=''
+REQUIREMENTS_FILE=''
+PIPELINES_REQUIREMENTS_PATH=''
 
 cp dev_pipelines/*.py pipelines
 # Default to development mode with auto-reload enabled
 # Can be overridden by setting UVICORN_EXTRA_FLAGS before running
-UVICORN_EXTRA_FLAGS=${UVICORN_EXTRA_FLAGS:-"--reload"}
+export UVICORN_EXTRA_FLAGS="--reload"
 
 ./start.sh
