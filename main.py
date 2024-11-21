@@ -27,6 +27,8 @@ import json
 import uuid
 import sys
 import subprocess
+import hashlib
+from pathlib import Path
 
 
 from config import API_KEY, PIPELINES_DIR
@@ -38,6 +40,27 @@ if not os.path.exists(PIPELINES_DIR):
 PIPELINES = {}
 PIPELINE_MODULES = {}
 PIPELINE_NAMES = {}
+
+# Setup persistent cache file for installed requirements
+CACHE_DIR = os.path.join(PIPELINES_DIR, '.cache')
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+REQUIREMENTS_CACHE_FILE = os.path.join(CACHE_DIR, 'installed_requirements.json')
+
+def load_requirements_cache():
+    if os.path.exists(REQUIREMENTS_CACHE_FILE):
+        try:
+            with open(REQUIREMENTS_CACHE_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            return set()
+    return set()
+
+def save_requirements_cache(cache):
+    with open(REQUIREMENTS_CACHE_FILE, 'w') as f:
+        json.dump(list(cache), f)
+
+INSTALLED_REQUIREMENTS = load_requirements_cache()
 
 
 def get_all_pipelines():
@@ -114,14 +137,25 @@ def parse_frontmatter(content):
             frontmatter[key.strip().lower()] = value.strip()
     return frontmatter
 
-def install_frontmatter_requirements(requirements):
+def install_frontmatter_requirements(requirements, module_name):
+    # Create a unique key based on both module name and its requirements
+    req_key = f"{module_name}:{requirements}" if requirements else module_name
+    req_hash = hashlib.md5(req_key.encode()).hexdigest()
+    
+    if req_hash in INSTALLED_REQUIREMENTS:
+        return
+
     if requirements:
         req_list = [req.strip() for req in requirements.split(',')]
         for req in req_list:
-            print(f"Installing requirement: {req}")
+            print(f"Installing requirement for {module_name}: {req}")
             subprocess.check_call([sys.executable, "-m", "pip", "install", req])
+        INSTALLED_REQUIREMENTS.add(req_hash)
+        save_requirements_cache(INSTALLED_REQUIREMENTS)
     else:
-        print("No requirements found in frontmatter.")
+        print(f"No requirements found in frontmatter for {module_name}.")
+        INSTALLED_REQUIREMENTS.add(req_hash)
+        save_requirements_cache(INSTALLED_REQUIREMENTS)
 
 async def load_module_from_path(module_name, module_path):
 
@@ -140,7 +174,7 @@ async def load_module_from_path(module_name, module_path):
 
         # Install requirements if specified
         if 'requirements' in frontmatter:
-            install_frontmatter_requirements(frontmatter['requirements'])
+            install_frontmatter_requirements(frontmatter['requirements'], module_name)
 
         # Load the module
         spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -232,10 +266,14 @@ async def on_shutdown():
 
 async def reload():
     await on_shutdown()
-    # Clear existing pipelines
+    # Clear existing pipelines and caches
     PIPELINES.clear()
     PIPELINE_MODULES.clear()
     PIPELINE_NAMES.clear()
+    if os.path.exists(REQUIREMENTS_CACHE_FILE):
+        os.remove(REQUIREMENTS_CACHE_FILE)
+    global INSTALLED_REQUIREMENTS
+    INSTALLED_REQUIREMENTS = set()
     # Load pipelines afresh
     await on_startup()
 
