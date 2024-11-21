@@ -129,5 +129,6 @@ fi
 
 
 
-# Start the server
-uvicorn main:app --host "$HOST" --port "$PORT" --forwarded-allow-ips '*'
+# Start the server with any extra flags passed via UVICORN_EXTRA_FLAGS
+UVICORN_EXTRA_FLAGS=${UVICORN_EXTRA_FLAGS:-""}
+uvicorn main:app --host "$HOST" --port "$PORT" --forwarded-allow-ips '*' $UVICORN_EXTRA_FLAGS
