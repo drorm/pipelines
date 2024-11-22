@@ -16,7 +16,7 @@ from typing import List, Union, Dict, AsyncGenerator
 from pydantic import BaseModel
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from dev.compute.loop import execute_command
@@ -31,7 +31,6 @@ class Pipeline:
         self.type = "manifold"
         self.id = "compute"
         logger.debug(f"#### Initializing {self.name} pipeline")
-        print(f"***** Initializing {self.name} pipeline *****")
         
         # Initialize valves
         self.valves = self.Valves(
@@ -77,7 +76,7 @@ class Pipeline:
 
         try:
             # First, use Claude to convert natural language to bash command
-            from dev.weather.claude import anthropic_completion
+            from dev.compute.claude import anthropic_completion
             
             prompt = f"""Based on this request: {user_message}
             Output ONLY the bash command that would execute this request.
@@ -88,7 +87,7 @@ class Pipeline:
             bash_command = anthropic_completion(
                 messages,
                 self.valves.ANTHROPIC_API_KEY,
-                "claude-3-haiku-20240307",
+                "claude-3-5-sonnet-20241022",
                 temperature=0,
                 max_tokens=100
             ).strip()
