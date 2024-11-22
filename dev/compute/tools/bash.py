@@ -4,8 +4,13 @@ Bash tool implementation for compute pipeline.
 
 import asyncio
 import os
+import logging
 from typing import ClassVar, Literal
 from dataclasses import dataclass
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ToolResult:
@@ -39,9 +44,12 @@ class _BashSession:
         self._timed_out = False
 
     async def start(self):
+        logger.debug("BashSession.start called")
         if self._started:
+            logger.debug("Session already started")
             return
 
+        logger.debug(f"Starting subprocess with command: {self.command}")
         self._process = await asyncio.create_subprocess_shell(
             self.command,
             preexec_fn=os.setsid,
@@ -53,25 +61,36 @@ class _BashSession:
         )
 
         self._started = True
+        logger.debug("Bash session started successfully")
 
     def stop(self):
         """Terminate the bash shell."""
+        logger.debug("BashSession.stop called")
         if not self._started:
+            logger.error("Attempting to stop session that hasn't started")
             raise ToolError("Session has not started.")
         if self._process.returncode is not None:
+            logger.debug("Process already terminated")
             return
+        logger.debug("Terminating bash process")
         self._process.terminate()
+        logger.debug("Bash process terminated")
 
     async def run(self, command: str):
         """Execute a command in the bash shell."""
+        logger.debug(f"BashSession.run called with command: {command}")
+        
         if not self._started:
+            logger.error("Session has not started")
             raise ToolError("Session has not started.")
         if self._process.returncode is not None:
+            logger.error(f"Bash has exited with returncode {self._process.returncode}")
             return ToolResult(
                 system="tool must be restarted",
                 error=f"bash has exited with returncode {self._process.returncode}",
             )
         if self._timed_out:
+            logger.error(f"Previous command timed out after {self._timeout} seconds")
             raise ToolError(
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             )
@@ -82,6 +101,7 @@ class _BashSession:
         assert self._process.stderr
 
         # send command to the process
+        logger.debug("Writing command to stdin")
         self._process.stdin.write(
             command.encode() + f"; echo '{self._sentinel}'\n".encode()
         )
@@ -89,16 +109,19 @@ class _BashSession:
 
         # read output from the process, until the sentinel is found
         try:
+            logger.debug("Reading command output")
             async with asyncio.timeout(self._timeout):
                 while True:
                     await asyncio.sleep(self._output_delay)
                     output = self._process.stdout._buffer.decode()
+                    logger.debug(f"Current output buffer: {output}")
                     if self._sentinel in output:
                         # strip the sentinel and break
                         output = output[: output.index(self._sentinel)]
                         break
         except asyncio.TimeoutError:
             self._timed_out = True
+            logger.error(f"Command timed out after {self._timeout} seconds")
             raise ToolError(
                 f"timed out: bash has not returned in {self._timeout} seconds and must be restarted",
             ) from None
@@ -110,11 +133,16 @@ class _BashSession:
         if error.endswith("\n"):
             error = error[:-1]
 
+        logger.debug(f"Command output: {output}")
+        logger.debug(f"Command error: {error}")
+
         # clear the buffers so that the next output can be read correctly
         self._process.stdout._buffer.clear()
         self._process.stderr._buffer.clear()
 
-        return CLIResult(output=output, error=error)
+        result = CLIResult(output=output, error=error)
+        logger.debug(f"Returning result: {result}")
+        return result
 
 
 class BashTool:
@@ -127,7 +155,10 @@ class BashTool:
         self._session = None
 
     async def __call__(self, command: str | None = None, restart: bool = False, **kwargs):
+        logger.debug(f"BashTool called with command: {command}, restart: {restart}, kwargs: {kwargs}")
+        
         if restart:
+            logger.debug("Restarting bash session")
             if self._session:
                 self._session.stop()
             self._session = _BashSession()
@@ -135,10 +166,15 @@ class BashTool:
             return ToolResult(system="tool has been restarted.")
 
         if self._session is None:
+            logger.debug("Initializing new bash session")
             self._session = _BashSession()
             await self._session.start()
 
         if command is not None:
-            return await self._session.run(command)
+            logger.debug(f"Running command: {command}")
+            result = await self._session.run(command)
+            logger.debug(f"Command result: {result}")
+            return result
 
+        logger.error("No command provided")
         raise ToolError("no command provided.")
