@@ -178,3 +178,38 @@ class BashTool:
 
         logger.error("No command provided")
         raise ToolError("no command provided.")
+
+    def sync_execute(self, command: str) -> ToolResult:
+        """Execute a command synchronously using subprocess.run"""
+        logger.debug(f"sync_execute called with command: {command}")
+        
+        try:
+            import subprocess
+            # Run command and capture output
+            process = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120  # Match async timeout
+            )
+            
+            # Create result object
+            result = CLIResult(
+                output=process.stdout if process.stdout else None,
+                error=process.stderr if process.stderr else None
+            )
+            
+            logger.debug(f"sync_execute result: {result}")
+            return result
+            
+        except subprocess.TimeoutExpired:
+            return CLIResult(
+                error="Command timed out after 120 seconds",
+                system="timeout"
+            )
+        except Exception as e:
+            return CLIResult(
+                error=str(e),
+                system="error"
+            )
