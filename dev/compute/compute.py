@@ -12,26 +12,12 @@ environment_variables: ANTHROPIC_API_KEY
 import os
 import json
 import logging
-from typing import List, Union, Dict, Generator, Iterator
+from typing import List, Union, Dict, AsyncGenerator
 from pydantic import BaseModel
 
 # Set up logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-# Add a stream handler if one doesn't exist
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-logger.info("Logger initialized for compute.py")
 
 from dev.compute.loop import execute_command
 from dev.compute.tools.bash import BashTool
@@ -74,23 +60,41 @@ class Pipeline:
 
     def pipe(
         self, user_message: str, model_id: str, messages: List[dict], body: dict
-    ) -> Union[str, Generator, Iterator]:
-        """Execute commands through the compute pipeline."""
-        print(f"pipe:{__name__}")  # Add debug print to match weather.py pattern
-        
+    ) -> str:
+        """Get bash command without executing it."""
+        logger.info(f"pipe called with user_message: {user_message}")
+        print(f"pipe called with user_message: {user_message}")
+
+        # Handle title request
+        if body.get("title", False):
+            return "Compute Pipeline"
+
+        # Verify the model is supported
+        if model_id != "compute-bash":
+            error_msg = f"Unsupported model ID: {model_id}. Use 'compute-bash'."
+            logger.error(error_msg)
+            return error_msg
+
         try:
-            # Handle title request
-            if body.get("title", False):
-                return "Compute Pipeline"
-
-            # Verify the model is supported
-            if model_id != "compute-bash":
-                return f"Unsupported model ID: {model_id}. Use 'compute-bash'."
-
-            # Execute command directly using BashTool
-            result = self.bash_tool.sync_execute(command=user_message)
+            # First, use Claude to convert natural language to bash command
+            from dev.weather.claude import anthropic_completion
             
-            # Format the output
+            prompt = f"""Based on this request: {user_message}
+            Output ONLY the bash command that would execute this request.
+            Do not execute it. Do not provide explanations.
+            If multiple commands are needed, combine them with && or ;"""
+            
+            messages = [{"role": "user", "content": prompt}]
+            bash_command = anthropic_completion(
+                messages,
+                self.valves.ANTHROPIC_API_KEY,
+                "claude-3-haiku-20240307",
+                temperature=0,
+                max_tokens=100
+            ).strip()
+            
+            # Then execute the bash command
+            result = self.bash_tool.sync_execute(command=bash_command)
             output_parts = []
             if result.output:
                 output_parts.append(result.output)
@@ -99,6 +103,8 @@ class Pipeline:
             if result.system:
                 output_parts.append(f"System: {result.system}")
             
+            # Return both the command and its output
+            output_parts.insert(0, f"Executing: {bash_command}")
             return "\n".join(output_parts) if output_parts else "Command executed successfully"
 
         except Exception as e:
