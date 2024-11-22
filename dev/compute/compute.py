@@ -1,11 +1,70 @@
 """
-title: Compute Pipeline to control a vm
-author: Dror Matalon
-date: 2024-11-22
-version: 0.1
+title: Compute Pipeline with Bash Tool
+author: Assistant
+date: 2024-11-20
+version: 1.0
 license: MIT
-description: A pipeline that uses an LLM to control a virtual machine. See https://docs.anthropic.com/en/docs/build-with-claude/computer-use
-requirements: requests
-environment_variables: ANTHROPIC_API_KEY, WEATHER_API_KEY
+description: A pipeline that enables execution of bash commands through an API endpoint
+requirements: anthropic
+environment_variables: ANTHROPIC_API_KEY
 """
 
+import os
+from typing import List, Union, Generator, Iterator
+from pydantic import BaseModel
+
+from dev.compute.loop import execute_command
+
+class Pipeline:
+    class Valves(BaseModel):
+        ANTHROPIC_API_KEY: str = ""
+
+    def __init__(self):
+        self.name = "Compute Pipeline"
+        self.type = "manifold"
+        self.id = "compute"
+        
+        # Initialize valves
+        self.valves = self.Valves(
+            ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", "")
+        )
+
+    async def on_startup(self):
+        print(f"on_startup:{__name__}")
+
+    async def on_shutdown(self):
+        print(f"on_shutdown:{__name__}")
+
+    async def on_valves_updated(self):
+        print(f"on_valves_updated:{__name__}")
+
+    def pipelines(self) -> List[dict]:
+        """Return list of supported models/pipelines"""
+        return [{
+            "id": "compute-bash",
+            "name": "Compute Pipeline (Bash)",
+            "description": "Execute bash commands via pipeline"
+        }]
+
+    async def pipe(
+        self, user_message: str, model_id: str, messages: List[dict], body: dict
+    ) -> Union[str, Generator, Iterator]:
+        print(f"pipe:{__name__}")
+
+        if body.get("title", False):
+            return "Compute Pipeline"
+
+        # Verify the model is supported
+        if model_id != "compute-bash":
+            raise ValueError(f"Unsupported model ID: {model_id}. Use 'compute-bash'.")
+
+        # Execute the command and return result
+        result = await execute_command(
+            command=user_message,
+            model="claude-3-haiku-20240307",  # Using haiku for faster response
+            api_key=self.valves.ANTHROPIC_API_KEY,
+            output_callback=lambda x: None,  # We don't need UI callbacks in the pipeline
+            tool_output_callback=lambda x, y: None
+        )
+
+        return result

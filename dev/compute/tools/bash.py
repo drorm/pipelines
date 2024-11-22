@@ -1,11 +1,27 @@
+"""
+Bash tool implementation for compute pipeline.
+"""
+
 import asyncio
 import os
 from typing import ClassVar, Literal
+from dataclasses import dataclass
 
-from anthropic.types.beta import BetaToolBash20241022Param
+@dataclass
+class ToolResult:
+    """Base class for tool execution results"""
+    output: str | None = None
+    error: str | None = None
+    system: str | None = None
 
-from .base import BaseAnthropicTool, CLIResult, ToolError, ToolResult
+@dataclass
+class CLIResult(ToolResult):
+    """Result from a CLI tool execution"""
+    pass
 
+class ToolError(Exception):
+    """Base exception for tool errors"""
+    pass
 
 class _BashSession:
     """A session of a bash shell."""
@@ -76,9 +92,7 @@ class _BashSession:
             async with asyncio.timeout(self._timeout):
                 while True:
                     await asyncio.sleep(self._output_delay)
-                    # if we read directly from stdout/stderr, it will wait forever for
-                    # EOF. use the StreamReader buffer directly instead.
-                    output = self._process.stdout._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
+                    output = self._process.stdout._buffer.decode()
                     if self._sentinel in output:
                         # strip the sentinel and break
                         output = output[: output.index(self._sentinel)]
@@ -92,40 +106,32 @@ class _BashSession:
         if output.endswith("\n"):
             output = output[:-1]
 
-        error = self._process.stderr._buffer.decode()  # pyright: ignore[reportAttributeAccessIssue]
+        error = self._process.stderr._buffer.decode()
         if error.endswith("\n"):
             error = error[:-1]
 
         # clear the buffers so that the next output can be read correctly
-        self._process.stdout._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
-        self._process.stderr._buffer.clear()  # pyright: ignore[reportAttributeAccessIssue]
+        self._process.stdout._buffer.clear()
+        self._process.stderr._buffer.clear()
 
         return CLIResult(output=output, error=error)
 
 
-class BashTool(BaseAnthropicTool):
-    """
-    A tool that allows the agent to run bash commands.
-    The tool parameters are defined by Anthropic and are not editable.
-    """
+class BashTool:
+    """Tool for running bash commands."""
 
     _session: _BashSession | None
     name: ClassVar[Literal["bash"]] = "bash"
-    api_type: ClassVar[Literal["bash_20241022"]] = "bash_20241022"
 
     def __init__(self):
         self._session = None
-        super().__init__()
 
-    async def __call__(
-        self, command: str | None = None, restart: bool = False, **kwargs
-    ):
+    async def __call__(self, command: str | None = None, restart: bool = False, **kwargs):
         if restart:
             if self._session:
                 self._session.stop()
             self._session = _BashSession()
             await self._session.start()
-
             return ToolResult(system="tool has been restarted.")
 
         if self._session is None:
@@ -136,9 +142,3 @@ class BashTool(BaseAnthropicTool):
             return await self._session.run(command)
 
         raise ToolError("no command provided.")
-
-    def to_params(self) -> BetaToolBash20241022Param:
-        return {
-            "type": self.api_type,
-            "name": self.name,
-        }

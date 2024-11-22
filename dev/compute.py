@@ -14,6 +14,9 @@ import json
 from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel
 
+# Import compute functionality from the compute subdirectory
+from dev.compute.tools.bash import BashTool
+
 class Pipeline:
     class Valves(BaseModel):
         ANTHROPIC_API_KEY: str = ""
@@ -27,6 +30,9 @@ class Pipeline:
         self.valves = self.Valves(
             ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", "")
         )
+        
+        # Initialize tools
+        self.bash_tool = BashTool()
 
     async def on_startup(self):
         print(f"on_startup:{__name__}")
@@ -57,6 +63,9 @@ class Pipeline:
         if model_id != "compute-bash":
             raise ValueError(f"Unsupported model ID: {model_id}. Use 'compute-bash'.")
 
-        # TODO: Implementation of bash command execution
-        # For now just return a placeholder
-        return "Command execution not yet implemented"
+        # Extract and execute bash command from the user message
+        try:
+            result = self.bash_tool.run(user_message)
+            return str(result) if result else "Command executed successfully"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
