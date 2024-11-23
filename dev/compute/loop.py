@@ -167,5 +167,30 @@ def _maybe_prepend_system_tool_result(result: ToolResult, result_text: str) -> s
         return ""
         
     if result.system:
-        return f"<SYSTEM>{result.system}</SYSTEM>\n\n{result_text}"
-    return result_text
+        return f"<s>{result.system}</s>\n\n{format_tool_output(result)}"
+    return format_tool_output(result)
+
+
+def format_tool_output(result: ToolResult) -> str:
+    """
+    Format the tool output appropriately based on whether it's output or error.
+    
+    Args:
+        result: The tool execution result
+        
+    Returns:
+        Formatted string with output/error
+    """
+    # If we have both output and error, format accordingly
+    if result.output and result.error:
+        return f"```\n{result.output}\n```\n{result.error}"
+    
+    # If we only have error, return it as plain text
+    if result.error:
+        return result.error
+        
+    # If we only have output, wrap it in code blocks
+    if result.output:
+        return f"```\n{result.output}\n```"
+        
+    return ""
