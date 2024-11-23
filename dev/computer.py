@@ -27,20 +27,23 @@ from anthropic.types.beta import (
 
 from ..utils.tools import BashTool, ToolCollection, ToolResult
 
+
 class Pipeline:
     class Valves(BaseModel):
         ANTHROPIC_API_KEY: str = ""
 
     def __init__(self):
         self.name = "Computer Pipeline"
-        
+
         # Initialize valves
         self.valves = self.Valves(
             **{
-                "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", "your-api-key-here"),
+                "ANTHROPIC_API_KEY": os.getenv(
+                    "ANTHROPIC_API_KEY", "your-api-key-here"
+                ),
             }
         )
-        
+
         # Initialize Anthropic pipeline
         self.anthropic_pipeline = AnthropicPipeline()
         self.anthropic_pipeline.valves.ANTHROPIC_API_KEY = self.valves.ANTHROPIC_API_KEY
@@ -62,27 +65,22 @@ class Pipeline:
         self.anthropic_pipeline.valves.ANTHROPIC_API_KEY = self.valves.ANTHROPIC_API_KEY
         await self.anthropic_pipeline.on_valves_updated()
 
-    def _make_tool_result(self, result: ToolResult, tool_use_id: str) -> BetaToolResultBlockParam:
+    def _make_tool_result(
+        self, result: ToolResult, tool_use_id: str
+    ) -> BetaToolResultBlockParam:
         """Convert a ToolResult to the API expected format"""
         tool_result_content: list[BetaContentBlockParam] = []
         is_error = bool(result.error)
 
         if result.system:
-            tool_result_content.append({
-                "type": "text",
-                "text": f"<s>{result.system}</s>"
-            })
+            tool_result_content.append(
+                {"type": "text", "text": f"<s>{result.system}</s>"}
+            )
 
         if result.error:
-            tool_result_content.append({
-                "type": "text",
-                "text": result.error
-            })
+            tool_result_content.append({"type": "text", "text": result.error})
         elif result.output:
-            tool_result_content.append({
-                "type": "text",
-                "text": result.output
-            })
+            tool_result_content.append({"type": "text", "text": result.output})
 
         return {
             "type": "tool_result",
@@ -99,7 +97,7 @@ class Pipeline:
         print(f"Model ID: {model_id}")
         print(f"Current messages count: {len(messages)}")
         print(f"Body: {json.dumps(body, indent=2)}")
-        
+
         # Check if this is a tagging request
         if "### Task:" in user_message and "Generate 1-3 broad tags" in user_message:
             print("\nHandling tagging request...")
@@ -107,7 +105,7 @@ class Pipeline:
 
         if body.get("title", False):
             return "Computer Pipeline"
-            
+
         # Add system prompt if this is the first message
         if not messages:
             system_prompt = f"""<SYSTEM_CAPABILITY>
@@ -139,8 +137,8 @@ class Pipeline:
                     "temperature": 0.7,
                     "max_tokens": 1024,
                     "tools": self.tool_collection.to_params(),
-                    "betas": ["computer-use-2024-10-22"]
-                }
+                    "betas": ["computer-use-2024-10-22"],
+                },
             )
             print(f"\nInitial response: {json.dumps(response, indent=2)}")
         except Exception as e:
@@ -154,12 +152,12 @@ class Pipeline:
                     tool_name = block.get("name")
                     tool_input = block.get("input", {})
                     tool_id = block.get("id")
-                    
+
                     try:
                         result = self.tool_collection.run(tool_name, tool_input)
                         tool_result = self._make_tool_result(result, tool_id)
                         messages.append({"role": "user", "content": [tool_result]})
-                        
+
                         # Get final response interpreting the results
                         print("\nGetting final response...")
                         final_response = self.anthropic_pipeline.pipe(
@@ -170,15 +168,14 @@ class Pipeline:
                                 "temperature": 0.7,
                                 "max_tokens": 1024,
                                 "tools": self.tool_collection.to_params(),
-                                "betas": ["computer-use-2024-10-22"]
-                            }
+                                "betas": ["computer-use-2024-10-22"],
+                            },
                         )
                         return final_response
                     except Exception as e:
                         print(f"\nError executing tool: {e}")
                         tool_result = self._make_tool_result(
-                            ToolResult(error=str(e)),
-                            tool_id
+                            ToolResult(error=str(e)), tool_id
                         )
                         messages.append({"role": "user", "content": [tool_result]})
 

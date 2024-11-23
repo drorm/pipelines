@@ -24,16 +24,16 @@ class Pipeline:
 
     def __init__(self):
         self.name = "Wikipedia Anthropic Combined Pipeline"
-        
+
         # Initialize valves first
         self.valves = self.Valves(
             **{"ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", "your-api-key-here")}
         )
-        
+
         # Initialize both sub-pipelines
         self.wiki_pipeline = WikipediaPipeline()
         self.anthropic_pipeline = AnthropicPipeline()
-        
+
         # Explicitly set the Anthropic API key in the child pipeline
         self.anthropic_pipeline.valves.ANTHROPIC_API_KEY = self.valves.ANTHROPIC_API_KEY
         self.anthropic_pipeline.update_headers()  # Update headers with new key
@@ -64,16 +64,16 @@ class Pipeline:
 
         # 1. Get Wikipedia content
         wiki_content = self.wiki_pipeline.pipe(user_message, model_id, messages, body)
-        
+
         if wiki_content == "No information found":
             return "Sorry, no Wikipedia information found for this query."
 
         # 2. Prepare prompt for Anthropic
         summary_prompt = f"Please provide a clear and concise summary of this Wikipedia article, highlighting the most important points: \n\n{wiki_content}"
-        
+
         # 3. Create message structure for Anthropic
         anthropic_messages = [{"role": "user", "content": summary_prompt}]
-        
+
         # 4. Get summary from Anthropic
         # Using claude-3-haiku by default for faster responses
         summary = self.anthropic_pipeline.pipe(
@@ -83,7 +83,7 @@ class Pipeline:
             {
                 "temperature": 0.7,
                 "max_tokens": 1000,
-            }
+            },
         )
 
         return summary
