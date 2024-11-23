@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 from dev.compute.loop import execute_command
 
+
 class Pipeline:
     class Valves(BaseModel):
         ANTHROPIC_API_KEY: str = ""
@@ -29,11 +30,9 @@ class Pipeline:
         self.type = "manifold"
         self.id = "compute"
         logger.debug(f"#### Initializing {self.name} pipeline")
-        
+
         # Initialize valves
-        self.valves = self.Valves(
-            ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", "")
-        )
+        self.valves = self.Valves(ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", ""))
 
     async def on_startup(self):
         print(f"on_startup:{__name__}")
@@ -46,11 +45,13 @@ class Pipeline:
 
     def pipelines(self) -> List[dict]:
         """Return list of supported models/pipelines"""
-        return [{
-            "id": "compute-bash",
-            "name": "Compute Pipeline (Bash)",
-            "description": "Execute bash commands via pipeline"
-        }]
+        return [
+            {
+                "id": "compute-bash",
+                "name": "Compute Pipeline (Bash)",
+                "description": "Execute bash commands via pipeline",
+            }
+        ]
 
     def pipe(
         self, user_message: str, model_id: str, messages: List[dict], body: dict
@@ -72,17 +73,18 @@ class Pipeline:
         try:
             # Execute command using our enhanced loop
             output_parts = []
-            
+
             # Define callbacks to collect output
             async def output_callback(content: Dict):
                 if content["type"] == "text":
                     output_parts.append(content["text"])
-                    
+
             async def tool_callback(result, tool_id):
                 if result.system:
                     output_parts.append(f"<SYSTEM>{result.system}</SYSTEM>")
 
-                        # Run command through execute_command
+                    # Run command through execute_command
+
             async def run_command():
                 async for chunk in execute_command(
                     command=user_message,
@@ -94,17 +96,16 @@ class Pipeline:
                 ):
                     if chunk["content"]:
                         output_parts.append(chunk["content"])
-                        # Add assistant's response to messages
-                        messages.append({
-                            "role": "assistant",
-                            "content": chunk["content"]
-                        })
 
             # Run the async function synchronously since pipe() is sync
             asyncio.run(run_command())
-            
+
             # Return collected output
-            return "\n".join(output_parts) if output_parts else "Command executed successfully"
+            return (
+                "\n".join(output_parts)
+                if output_parts
+                else "Command executed successfully"
+            )
 
         except Exception as e:
             error_msg = f"Error in pipe: {str(e)}"
