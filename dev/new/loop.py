@@ -1,5 +1,53 @@
 """
-Agentic sampling loop that calls the Anthropic API and local implementation of anthropic-defined computer use tools.
+Core agentic loop implementation for Anthropic's computer use tool framework.
+
+This module implements the main interaction loop between language models and computer
+control tools through the Anthropic API. It provides the infrastructure for:
+
+1. Language Model Integration
+   - Support for multiple API providers (Anthropic, Bedrock, Vertex)
+   - Managed conversation context and history
+   - Prompt caching optimization
+   - Error handling and recovery
+
+2. Tool Management
+   - Bash command execution
+   - Computer GUI interaction
+   - File system operations
+   - Tool result processing and feedback
+
+3. Performance Optimization
+   - Image context pruning
+   - Strategic prompt caching
+   - Efficient message handling
+
+The module is designed to be provider-agnostic while maintaining compatibility with
+Anthropic's tool specifications. It handles the complexities of maintaining state,
+managing resources, and providing a reliable interface between the LLM and computer
+control tools.
+
+Example Usage:
+    ```python
+    from computer_use_demo.loop import sampling_loop, APIProvider
+    
+    messages = [{
+        "role": "user",
+        "content": "What files are in the current directory?"
+    }]
+    
+    result = await sampling_loop(
+        model="claude-3-sonnet",
+        provider=APIProvider.ANTHROPIC,
+        messages=messages,
+        output_callback=handle_output,
+        tool_output_callback=handle_tool_output,
+        api_response_callback=handle_api_response,
+        api_key="your-key"
+    )
+    ```
+
+The module provides a complete framework for building agentic applications that can
+control and interact with computer systems through natural language instructions.
 """
 
 import platform
@@ -85,8 +133,50 @@ async def sampling_loop(
     only_n_most_recent_images: int | None = None,
     max_tokens: int = 4096,
 ):
-    """
-    Agentic sampling loop for the assistant/tool interaction of computer use.
+    """Main agentic loop managing interactions between the LLM and tools.
+
+    This function implements the core interaction loop between the language model
+    and the available tools. It:
+    1. Sends the current conversation state to the LLM
+    2. Receives and processes the LLM's response
+    3. Executes any tool actions requested by the LLM
+    4. Feeds tool results back to the LLM
+    5. Continues until the LLM completes its task or encounters an error
+
+    Args:
+        model: Name of the LLM model to use (e.g., "claude-3-sonnet")
+        provider: The API provider to use (Anthropic, Bedrock, or Vertex)
+        system_prompt_suffix: Additional context to append to the system prompt
+        messages: The conversation history in Anthropic message format
+        output_callback: Function to call with each LLM response block
+        tool_output_callback: Function to call with tool execution results
+        api_response_callback: Function to call with API request/response details
+        api_key: API key for authentication (Anthropic only)
+        only_n_most_recent_images: Optional limit on number of images to include
+        max_tokens: Maximum tokens in LLM response (default: 4096)
+
+    Returns:
+        list[BetaMessageParam]: Updated conversation history including tool interactions
+
+    The function handles:
+    - Setting up tool collection (bash, computer, editor tools)
+    - Managing conversation context including image pruning
+    - API error handling and recovery
+    - Tool execution and result integration
+    - Prompt caching for improved performance
+
+    Example:
+        messages = [{"role": "user", "content": "List files in /tmp"}]
+        result = await sampling_loop(
+            model="claude-3",
+            provider=APIProvider.ANTHROPIC,
+            system_prompt_suffix="",
+            messages=messages,
+            output_callback=print_output,
+            tool_output_callback=print_tool_output,
+            api_response_callback=log_api_response,
+            api_key="my-key"
+        )
     """
     tool_collection = ToolCollection(
         ComputerTool(),
@@ -182,11 +272,28 @@ def _maybe_filter_to_n_most_recent_images(
     images_to_keep: int,
     min_removal_threshold: int,
 ):
-    """
-    With the assumption that images are screenshots that are of diminishing value as
-    the conversation progresses, remove all but the final `images_to_keep` tool_result
-    images in place, with a chunk of min_removal_threshold to reduce the amount we
-    break the implicit prompt cache.
+    """Filter the conversation history to keep only recent images.
+
+    This function optimizes the conversation context by removing older screenshots,
+    which typically become less relevant as the conversation progresses. It operates
+    with the following assumptions:
+
+    1. Screenshots (images) from earlier in the conversation are less important
+    2. Removing images in chunks helps maintain prompt cache efficiency
+    3. A minimum threshold of images should be removed to make the operation worthwhile
+
+    Args:
+        messages: The full conversation history to filter
+        images_to_keep: Number of most recent images to retain
+        min_removal_threshold: Minimum batch size for image removal
+
+    The function modifies the messages list in-place, removing images from tool_result
+    blocks while preserving all other content. Images are removed in batches of at
+    least min_removal_threshold to optimize prompt cache usage.
+
+    Example:
+        # Keep only the 10 most recent images, removing in batches of 5
+        _maybe_filter_to_n_most_recent_images(messages, 10, 5)
     """
     if images_to_keep is None:
         return messages
@@ -229,6 +336,29 @@ def _maybe_filter_to_n_most_recent_images(
 def _response_to_params(
     response: BetaMessage,
 ) -> list[BetaTextBlockParam | BetaToolUseBlockParam]:
+    """Convert an Anthropic API response to message parameters.
+
+    This function processes a response from the Anthropic API and converts it into
+    a list of content blocks that can be used in the conversation history. It handles
+    both text blocks and tool use blocks from the response.
+
+    Args:
+        response: The API response message to process
+
+    Returns:
+        list: A list of content blocks, each either text or tool use parameters
+
+    The function:
+    1. Extracts content blocks from the response
+    2. Converts text blocks to simple text parameters
+    3. Preserves tool use blocks as-is
+    4. Returns all blocks in chronological order
+
+    Example:
+        response = client.messages.create(...)
+        params = _response_to_params(response)
+        messages.append({"role": "assistant", "content": params})
+    """
     res: list[BetaTextBlockParam | BetaToolUseBlockParam] = []
     for block in response.content:
         if isinstance(block, BetaTextBlock):
@@ -241,9 +371,32 @@ def _response_to_params(
 def _inject_prompt_caching(
     messages: list[BetaMessageParam],
 ):
-    """
-    Set cache breakpoints for the 3 most recent turns
-    one cache breakpoint is left for tools/system prompt, to be shared across sessions
+    """Optimize API performance by configuring prompt caching breakpoints.
+
+    This function manages the Anthropic API's prompt caching feature by strategically
+    setting cache breakpoints in the conversation history. It implements a caching
+    strategy that:
+
+    1. Marks the 3 most recent conversation turns as ephemeral (not cached)
+    2. Allows all earlier turns to be cached
+    3. Reserves one cache slot for system prompt and tools, shared across sessions
+
+    Args:
+        messages: The conversation history to modify
+
+    The function modifies the messages in-place, adding or removing cache control
+    parameters as needed. Only user messages with tool results can be marked as
+    cache breakpoints.
+
+    Caching Strategy:
+    - Recent turns are marked ephemeral to allow for dynamic conversation
+    - Older turns are cached to improve API performance
+    - System/tools share a cache to maintain consistency across sessions
+
+    Example:
+        messages = [...]  # Conversation history
+        _inject_prompt_caching(messages)
+        # Messages now have appropriate cache control settings
     """
 
     breakpoints_remaining = 3
