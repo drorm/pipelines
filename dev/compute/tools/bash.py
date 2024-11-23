@@ -12,28 +12,21 @@ from dataclasses import dataclass
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class ToolResult:
     """Base class for tool execution results"""
-
     output: str | None = None
     error: str | None = None
     system: str | None = None
 
-
 @dataclass
 class CLIResult(ToolResult):
     """Result from a CLI tool execution"""
-
     pass
-
 
 class ToolError(Exception):
     """Base exception for tool errors"""
-
     pass
-
 
 class _BashSession:
     """A session of a bash shell."""
@@ -86,7 +79,7 @@ class _BashSession:
     async def run(self, command: str):
         """Execute a command in the bash shell."""
         logger.debug(f"BashSession.run called with command: {command}")
-
+        
         if not self._started:
             logger.error("Session has not started")
             raise ToolError("Session has not started.")
@@ -157,7 +150,7 @@ class BashTool:
 
     _session: _BashSession | None
     name: ClassVar[Literal["bash"]] = "bash"
-
+    
     def to_params(self) -> dict:
         """Convert tool to Claude API format."""
         return {
@@ -168,23 +161,19 @@ class BashTool:
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The bash command to execute",
+                        "description": "The bash command to execute"
                     }
                 },
-                "required": ["command"],
-            },
+                "required": ["command"]
+            }
         }
 
     def __init__(self):
         self._session = None
 
-    async def __call__(
-        self, command: str | None = None, restart: bool = False, **kwargs
-    ):
-        logger.debug(
-            f"BashTool called with command: {command}, restart: {restart}, kwargs: {kwargs}"
-        )
-
+    async def __call__(self, command: str | None = None, restart: bool = False, **kwargs):
+        logger.debug(f"BashTool called with command: {command}, restart: {restart}, kwargs: {kwargs}")
+        
         if restart:
             logger.debug("Restarting bash session")
             if self._session:
@@ -210,31 +199,34 @@ class BashTool:
     def sync_execute(self, command: str) -> ToolResult:
         """Execute a command synchronously using subprocess.run"""
         logger.debug(f"sync_execute called with command: {command}")
-
+        
         try:
             import subprocess
-
             # Run command and capture output
             process = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=120,  # Match async timeout
+                timeout=120  # Match async timeout
             )
-
+            
             # Create result object
             result = CLIResult(
                 output=process.stdout if process.stdout else None,
-                error=process.stderr if process.stderr else None,
+                error=process.stderr if process.stderr else None
             )
-
+            
             logger.debug(f"sync_execute result: {result}")
             return result
-
+            
         except subprocess.TimeoutExpired:
             return CLIResult(
-                error="Command timed out after 120 seconds", system="timeout"
+                error="Command timed out after 120 seconds",
+                system="timeout"
             )
         except Exception as e:
-            return CLIResult(error=str(e), system="error")
+            return CLIResult(
+                error=str(e),
+                system="error"
+            )

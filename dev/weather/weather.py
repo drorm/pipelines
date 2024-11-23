@@ -18,7 +18,6 @@ from pydantic import BaseModel
 # Import Claude functionality
 from dev.weather.claude import anthropic_completion
 
-
 class Pipeline:
     class Valves(BaseModel):
         ANTHROPIC_API_KEY: str = ""
@@ -28,12 +27,12 @@ class Pipeline:
         self.name = "Weather Pipeline"
         self.type = "manifold"
         self.id = "weather"
-
+        
         # Initialize valves
         self.valves = self.Valves(
             **{
                 "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
-                "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY", ""),
+                "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY", "")
             }
         )
 
@@ -48,39 +47,41 @@ class Pipeline:
 
     def pipelines(self) -> List[dict]:
         """Return list of supported models/pipelines"""
-        return [
-            {
-                "id": "weather-claude",
-                "name": "Weather Pipeline (Claude)",
-                "description": "Get weather information using Claude for natural language processing",
-            }
-        ]
+        return [{
+            "id": "weather-claude",
+            "name": "Weather Pipeline (Claude)",
+            "description": "Get weather information using Claude for natural language processing"
+        }]
 
     def get_weather(self, location: str, unit: str = "celsius") -> str:
         """Get weather data from OpenWeatherMap API"""
         try:
             # Parse location to get city and country
-            parts = location.split(",")
+            parts = location.split(',')
             city = parts[0].strip()
-            country = parts[1].strip() if len(parts) > 1 else ""
-
+            country = parts[1].strip() if len(parts) > 1 else ''
+            
             # Build API URL
             api_key = self.valves.WEATHER_API_KEY
             units = "metric" if unit == "celsius" else "imperial"
             base_url = "https://api.openweathermap.org/data/2.5/weather"
-
+            
             # Make API request
-            params = {"q": f"{city},{country}", "APPID": api_key, "units": units}
-
+            params = {
+                'q': f"{city},{country}",
+                'APPID': api_key,
+                'units': units
+            }
+            
             response = requests.get(base_url, params=params)
             response.raise_for_status()  # Raise exception for bad status codes
-
+            
             weather_data = response.json()
-            temperature = weather_data["main"]["temp"]
-            description = weather_data["weather"][0]["description"]
-
+            temperature = weather_data['main']['temp']
+            description = weather_data['weather'][0]['description']
+            
             return f"{temperature:.1f} degrees {unit} with {description}"
-
+            
         except requests.RequestException as e:
             print(f"Error fetching weather data: {e}")
             return "Sorry, I couldn't fetch the weather data at the moment."
@@ -108,7 +109,7 @@ class Pipeline:
             self.valves.ANTHROPIC_API_KEY,
             "claude-3-haiku-20240307",
             temperature=0.7,
-            max_tokens=100,
+            max_tokens=100
         )
 
         # 2. Get weather for the location
@@ -122,7 +123,7 @@ class Pipeline:
             self.valves.ANTHROPIC_API_KEY,
             "claude-3-haiku-20240307",
             temperature=0.7,
-            max_tokens=150,
+            max_tokens=150
         )
 
         return final_response
