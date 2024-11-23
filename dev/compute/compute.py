@@ -82,17 +82,23 @@ class Pipeline:
                 if result.system:
                     output_parts.append(f"<SYSTEM>{result.system}</SYSTEM>")
 
-			# Run command through execute_command
+                        # Run command through execute_command
             async def run_command():
                 async for chunk in execute_command(
                     command=user_message,
                     model="claude-3-5-sonnet-20241022",
                     api_key=self.valves.ANTHROPIC_API_KEY,
+                    messages=messages,  # Pass the message history
                     output_callback=output_callback,
                     tool_output_callback=tool_callback,
                 ):
                     if chunk["content"]:
                         output_parts.append(chunk["content"])
+                        # Add assistant's response to messages
+                        messages.append({
+                            "role": "assistant",
+                            "content": chunk["content"]
+                        })
 
             # Run the async function synchronously since pipe() is sync
             asyncio.run(run_command())

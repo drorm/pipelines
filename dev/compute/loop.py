@@ -43,6 +43,7 @@ async def execute_command(
     command: str,
     model: str,
     api_key: str,
+    messages: list[dict] | None = None,
     output_callback: Callable[[Dict[str, Any]], None] | None = None,
     tool_output_callback: Callable[[ToolResult, str], None] | None = None,
 ) -> AsyncGenerator[Dict[str, str], None]:
@@ -53,6 +54,7 @@ async def execute_command(
         command: The bash command to execute
         model: The Claude model to use
         api_key: Anthropic API key
+        messages: Optional list of previous message history
         output_callback: Optional callback for Claude's responses
         tool_output_callback: Optional callback for tool outputs
         
@@ -68,7 +70,11 @@ async def execute_command(
     
     try:
         # Get Claude's interpretation/validation of the command
-        messages = [{"role": "user", "content": command}]
+        if messages is None:
+            messages = []
+            
+        # Add the new command to messages
+        messages.append({"role": "user", "content": command})
         
         raw_response = client.beta.messages.create(
             max_tokens=1024,
