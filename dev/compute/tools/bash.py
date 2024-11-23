@@ -150,6 +150,23 @@ class BashTool:
 
     _session: _BashSession | None
     name: ClassVar[Literal["bash"]] = "bash"
+    
+    def to_params(self) -> dict:
+        """Convert tool to Claude API format."""
+        return {
+            "name": "bash",
+            "description": "Execute bash commands in the virtual machine",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute"
+                    }
+                },
+                "required": ["command"]
+            }
+        }
 
     def __init__(self):
         self._session = None

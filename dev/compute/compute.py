@@ -5,14 +5,13 @@ date: 2024-11-20
 version: 1.0
 license: MIT
 description: A pipeline that enables execution of bash commands through an API endpoint
-requirements: anthropic
 environment_variables: ANTHROPIC_API_KEY
 """
 
 import os
-import json
 import logging
-from typing import List, Union, Dict, AsyncGenerator
+import asyncio
+from typing import List, Dict
 from pydantic import BaseModel
 
 # Set up logging
@@ -20,7 +19,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from dev.compute.loop import execute_command
-from dev.compute.tools.bash import BashTool
 
 class Pipeline:
     class Valves(BaseModel):
@@ -36,9 +34,6 @@ class Pipeline:
         self.valves = self.Valves(
             ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", "")
         )
-        
-        # Initialize tools
-        self.bash_tool = BashTool()
 
     async def on_startup(self):
         print(f"on_startup:{__name__}")
@@ -60,7 +55,7 @@ class Pipeline:
     def pipe(
         self, user_message: str, model_id: str, messages: List[dict], body: dict
     ) -> str:
-        """Get bash command without executing it."""
+        """Execute bash commands through Claude with tool integration."""
         logger.info(f"pipe called with user_message: {user_message}")
         print(f"pipe called with user_message: {user_message}")
 
@@ -75,35 +70,34 @@ class Pipeline:
             return error_msg
 
         try:
-            # First, use Claude to convert natural language to bash command
-            from dev.compute.claude import anthropic_completion
-            
-            prompt = f"""Based on this request: {user_message}
-            Output ONLY the bash command that would execute this request.
-            Do not execute it. Do not provide explanations.
-            If multiple commands are needed, combine them with && or ;"""
-            
-            messages = [{"role": "user", "content": prompt}]
-            bash_command = anthropic_completion(
-                messages,
-                self.valves.ANTHROPIC_API_KEY,
-                "claude-3-5-sonnet-20241022",
-                temperature=0,
-                max_tokens=100
-            ).strip()
-            
-            # Then execute the bash command
-            result = self.bash_tool.sync_execute(command=bash_command)
+            # Execute command using our enhanced loop
             output_parts = []
-            if result.output:
-                output_parts.append(result.output)
-            if result.error:
-                output_parts.append(f"Error: {result.error}")
-            if result.system:
-                output_parts.append(f"System: {result.system}")
             
-            # Return both the command and its output
-            output_parts.insert(0, f"Executing: {bash_command}")
+            # Define callbacks to collect output
+            async def output_callback(content: Dict):
+                if content["type"] == "text":
+                    output_parts.append(content["text"])
+                    
+            async def tool_callback(result, tool_id):
+                if result.system:
+                    output_parts.append(f"<SYSTEM>{result.system}</SYSTEM>")
+
+			# Run command through execute_command
+            async def run_command():
+                async for chunk in execute_command(
+                    command=user_message,
+                    model="claude-3-5-sonnet-20241022",
+                    api_key=self.valves.ANTHROPIC_API_KEY,
+                    output_callback=output_callback,
+                    tool_output_callback=tool_callback,
+                ):
+                    if chunk["content"]:
+                        output_parts.append(chunk["content"])
+
+            # Run the async function synchronously since pipe() is sync
+            asyncio.run(run_command())
+            
+            # Return collected output
             return "\n".join(output_parts) if output_parts else "Command executed successfully"
 
         except Exception as e:
