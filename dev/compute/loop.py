@@ -35,6 +35,12 @@ SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 * Only execute valid bash commands
 * Dangerous commands will return an error instead of executing
 * Do not try to use X11/GUI applications
+* For each task, you must either:
+  1. Complete the requested goal and indicate success with "TASK COMPLETED: [brief explanation of what was accomplished]"
+  2. Determine the goal cannot be achieved and indicate failure with "TASK FAILED: [explanation of why it cannot be done]"
+* You have a maximum of 5 operations to complete each task
+* Each command execution counts as one operation
+* If you reach the operation limit without completing the task, respond with "OPERATION LIMIT REACHED: [current status and what remains to be done]"
 </IMPORTANT>"""
 
 
@@ -48,10 +54,10 @@ async def execute_command(
     tool_output_callback: Callable[[ToolResult, str], None] | None = None,
 ) -> AsyncGenerator[Dict[str, str], None]:
     """
-    Execute a bash command by passing it through Claude for validation and execution.
+    Execute commands through Claude to accomplish a given task, with up to 5 operations.
     
     Args:
-        command: The bash command to execute
+        command: The task/goal to accomplish
         model: The Claude model to use
         api_key: Anthropic API key
         messages: Optional list of previous message history
@@ -68,44 +74,99 @@ async def execute_command(
     # Create Anthropic client
     client = Anthropic(api_key=api_key)
     
+    # Initialize operation counter
+    operation_count = 0
+    max_operations = 5
+    
     try:
         # Get Claude's interpretation/validation of the command
         if messages is None:
             messages = []
             
-        # Add the new command to messages
+        # Add the initial task to messages
         messages.append({"role": "user", "content": command})
         
-        raw_response = client.beta.messages.create(
-            max_tokens=1024,
-            messages=messages,
-            model=model,
-            system=SYSTEM_PROMPT,
-            tools=tool_collection,
-        )
+        while operation_count < max_operations:
+            raw_response = client.beta.messages.create(
+                max_tokens=1024,
+                messages=messages,
+                model=model,
+                system=SYSTEM_PROMPT,
+                tools=tool_collection,
+            )
 
-        response_params = _response_to_params(raw_response)
-        
-        if output_callback:
+            response_params = _response_to_params(raw_response)
+            
+            # Track if this turn used a tool operation
+            used_tool = False
+            response_content = []  # Collect all content for this turn
+            
+            # First process and collect assistant's response
+            tool_result_content = []  # Collect tool results for user message
+            assistant_content = []  # Collect text/tool use for assistant message
+            
             for content_block in response_params:
-                await output_callback(content_block)
-
-        for content_block in response_params:
-            if content_block["type"] == "tool_use":
-                # Execute the command through the bash tool
-                result = await bash_tool(command=content_block["input"]["command"])
+                if output_callback:
+                    await output_callback(content_block)
                 
-                if tool_output_callback:
-                    await tool_output_callback(result, content_block["id"])
+                if content_block["type"] == "text":
+                    text = content_block["text"]
+                    assistant_content.append({"type": "text", "text": text})
+                    yield {"content": text}
                     
-                # Process the tool result
-                tool_result = _make_api_tool_result(result, content_block["id"])
-                
-                # Get the output text with any system messages prepended
-                output = _maybe_prepend_system_tool_result(result, 
-                    result.output if result.output else result.error if result.error else "")
-                
-                yield {"content": output}
+                    # Check for task completion markers
+                    text_lower = text.lower()
+                    if any(marker in text_lower for marker in ["task completed:", "task failed:", "operation limit reached:"]):
+                        if assistant_content:
+                            messages.append({
+                                "role": "assistant",
+                                "content": assistant_content
+                            })
+                        return
+                        
+                elif content_block["type"] == "tool_use":
+                    used_tool = True
+                    assistant_content.append(content_block)  # Add tool use to assistant message
+                    
+                    # Execute the command through the bash tool
+                    result = await bash_tool(command=content_block["input"]["command"])
+                    
+                    if tool_output_callback:
+                        await tool_output_callback(result, content_block["id"])
+                        
+                    # Process the tool result
+                    tool_result = _make_api_tool_result(result, content_block["id"])
+                    tool_result_content.append(tool_result)  # Collect for user message
+                    
+                    # Get the output text with any system messages prepended
+                    output = _maybe_prepend_system_tool_result(result, 
+                        result.output if result.output else result.error if result.error else "")
+                    
+                    yield {"content": output}
+            
+            # Add assistant's response (text and tool uses)
+            if assistant_content:
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_content
+                })
+            
+            # Add tool results as user message
+            if tool_result_content:
+                messages.append({
+                    "role": "user",
+                    "content": tool_result_content
+                })
+            
+            # If we used a tool, increment the operation counter
+            if used_tool:
+                operation_count += 1
+                if operation_count >= max_operations:
+                    yield {"content": "Operation limit reached. Waiting for LLM's final status..."}
+            
+            # If no tool was used, the LLM is likely done
+            if not used_tool:
+                return
             
     except Exception as e:
         yield {"content": f"Error executing command: {str(e)}"}
@@ -145,16 +206,26 @@ def _make_api_tool_result(
     Returns:
         Formatted tool result block
     """
+    tool_result_content = []
+    is_error = False
+    
+    if result.error:
+        is_error = True
+        output_text = result.error
+    else:
+        output_text = result.output if result.output else ""
+        
+    if output_text:
+        tool_result_content.append({
+            "type": "text",
+            "text": _maybe_prepend_system_tool_result(result, output_text)
+        })
+    
     return {
         "type": "tool_result",
-        "tool_call_id": tool_use_id,
-        "name": "bash",
-        "content": [
-            {
-                "type": "text",
-                "text": result.output if result.output else result.error
-            }
-        ]
+        "content": tool_result_content,
+        "tool_use_id": tool_use_id,
+        "is_error": is_error
     }
 
 
