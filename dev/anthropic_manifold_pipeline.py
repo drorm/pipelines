@@ -31,14 +31,14 @@ class Pipeline:
         self.valves = self.Valves(
             **{"ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", "your-api-key-here")}
         )
-        self.url = 'https://api.anthropic.com/v1/messages'
+        self.url = "https://api.anthropic.com/v1/messages"
         self.update_headers()
 
     def update_headers(self):
         self.headers = {
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-            'x-api-key': self.valves.ANTHROPIC_API_KEY
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "x-api-key": self.valves.ANTHROPIC_API_KEY,
         }
 
     def get_anthropic_models(self):
@@ -87,7 +87,7 @@ class Pipeline:
     ) -> Union[str, Generator, Iterator]:
         try:
             # Remove unnecessary keys
-            for key in ['user', 'chat_id', 'title']:
+            for key in ["user", "chat_id", "title"]:
                 body.pop(key, None)
 
             system_message, messages = pop_system_message(messages)
@@ -101,28 +101,40 @@ class Pipeline:
                 if isinstance(message.get("content"), list):
                     for item in message["content"]:
                         if item["type"] == "text":
-                            processed_content.append({"type": "text", "text": item["text"]})
+                            processed_content.append(
+                                {"type": "text", "text": item["text"]}
+                            )
                         elif item["type"] == "image_url":
                             if image_count >= 5:
-                                raise ValueError("Maximum of 5 images per API call exceeded")
+                                raise ValueError(
+                                    "Maximum of 5 images per API call exceeded"
+                                )
 
                             processed_image = self.process_image(item["image_url"])
                             processed_content.append(processed_image)
 
                             if processed_image["source"]["type"] == "base64":
-                                image_size = len(processed_image["source"]["data"]) * 3 / 4
+                                image_size = (
+                                    len(processed_image["source"]["data"]) * 3 / 4
+                                )
                             else:
                                 image_size = 0
 
                             total_image_size += image_size
                             if total_image_size > 100 * 1024 * 1024:
-                                raise ValueError("Total size of images exceeds 100 MB limit")
+                                raise ValueError(
+                                    "Total size of images exceeds 100 MB limit"
+                                )
 
                             image_count += 1
                 else:
-                    processed_content = [{"type": "text", "text": message.get("content", "")}]
+                    processed_content = [
+                        {"type": "text", "text": message.get("content", "")}
+                    ]
 
-                processed_messages.append({"role": message["role"], "content": processed_content})
+                processed_messages.append(
+                    {"role": message["role"], "content": processed_content}
+                )
 
             # Prepare the payload
             payload = {
@@ -145,7 +157,9 @@ class Pipeline:
             return f"Error: {e}"
 
     def stream_response(self, payload: dict) -> Generator:
-        response = requests.post(self.url, headers=self.headers, json=payload, stream=True)
+        response = requests.post(
+            self.url, headers=self.headers, json=payload, stream=True
+        )
 
         if response.status_code == 200:
             client = sseclient.SSEClient(response)
@@ -170,6 +184,8 @@ class Pipeline:
         response = requests.post(self.url, headers=self.headers, json=payload)
         if response.status_code == 200:
             res = response.json()
-            return res["content"][0]["text"] if "content" in res and res["content"] else ""
+            return (
+                res["content"][0]["text"] if "content" in res and res["content"] else ""
+            )
         else:
             raise Exception(f"Error: {response.status_code} - {response.text}")
