@@ -17,6 +17,8 @@ from typing import Any, Dict, Union, AsyncGenerator, cast
 import httpx
 from anthropic import (
     Anthropic,
+    AnthropicBedrock,
+    AnthropicVertex,
     APIError,
     APIResponseValidationError,
     APIStatusError,
@@ -41,10 +43,14 @@ PROMPT_CACHING_BETA_FLAG = "prompt-caching-2024-07-31"
 
 class APIProvider(StrEnum):
     ANTHROPIC = "anthropic"
+    BEDROCK = "bedrock"
+    VERTEX = "vertex"
 
 
 PROVIDER_TO_DEFAULT_MODEL_NAME: dict[APIProvider, str] = {
     APIProvider.ANTHROPIC: "claude-3-5-sonnet-20241022",
+    APIProvider.BEDROCK: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    APIProvider.VERTEX: "claude-3-5-sonnet-v2@20241022",
 }
 
 
@@ -71,156 +77,6 @@ SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 </IMPORTANT>"""
 
 
-async def execute_command(
-    *,
-    command: str,
-    model: str,
-    api_key: str,
-    messages: list[dict] | None = None,
-    output_callback: Callable[[Dict[str, Any]], None] | None = None,
-    tool_output_callback: Callable[[ToolResult, str], None] | None = None,
-    max_tokens: int = 1024,
-    max_operations: int = 5,
-) -> AsyncGenerator[Dict[str, str], None]:
-    """
-    Execute commands through Claude to accomplish a given task, with up to max_operations operations.
-
-    Args:
-        command: The task/goal to accomplish
-        model: The Claude model to use
-        api_key: Anthropic API key
-        messages: Optional list of previous message history
-        output_callback: Optional callback for Claude's responses
-        tool_output_callback: Optional callback for tool outputs
-        max_tokens: Maximum number of tokens for model response
-        max_operations: Maximum number of operations allowed
-
-    Returns:
-        An async generator yielding chunks of output as {"content": str} dictionaries
-    """
-    # Initialize bash tool
-    bash_tool = BashTool()
-
-    # Keep ToolCollection for compatibility but only use bash
-    tool_collection = ToolCollection(bash_tool)
-
-    # Create Anthropic client
-    client = Anthropic(api_key=api_key)
-
-    # Initialize operation counter
-    operation_count = 0
-
-    try:
-        # Get Claude's interpretation/validation of the command
-        if messages is None:
-            messages = []
-
-        # Add the initial task to messages
-        messages.append({"role": "user", "content": command})
-
-        while operation_count < max_operations:
-            # Call the API with raw response for compatibility
-            try:
-                raw_response = client.beta.messages.with_raw_response.create(
-                    max_tokens=max_tokens,
-                    messages=messages,
-                    model=model,
-                    system=SYSTEM_PROMPT,
-                    tools=tool_collection.to_params(),
-                )
-            except (APIStatusError, APIResponseValidationError) as e:
-                yield {"content": f"API Error: {str(e)}"}
-                return
-            except APIError as e:
-                yield {"content": f"API Error: {str(e)}"}
-                return
-
-            response = raw_response.parse()
-            response_params = _response_to_params(response)
-
-            # Track if this turn used a tool operation
-            used_tool = False
-            response_content = []  # Collect all content for this turn
-
-            # First process and collect assistant's response
-            tool_result_content = []  # Collect tool results for user message
-            assistant_content = []  # Collect text/tool use for assistant message
-
-            for content_block in response_params:
-                if output_callback:
-                    await output_callback(content_block)
-
-                if content_block["type"] == "text":
-                    text = content_block["text"]
-                    assistant_content.append({"type": "text", "text": text})
-                    yield {"content": text}
-
-                    # Check for task completion markers
-                    text_lower = text.lower()
-                    if any(
-                        marker in text_lower
-                        for marker in [
-                            "task completed:",
-                            "task failed:",
-                            "operation limit reached:",
-                        ]
-                    ):
-                        if assistant_content:
-                            messages.append(
-                                {"role": "assistant", "content": assistant_content}
-                            )
-                        return
-
-                elif content_block["type"] == "tool_use":
-                    used_tool = True
-                    assistant_content.append(content_block)
-
-                    # Execute the command through the bash tool
-                    result = await bash_tool(command=content_block["input"]["command"])
-
-                    if tool_output_callback:
-                        await tool_output_callback(result, content_block["id"])
-
-                    # Process the tool result
-                    tool_result = _make_api_tool_result(result, content_block["id"])
-                    tool_result_content.append(tool_result)  # Collect for user message
-
-                    # Get the output text with any system messages prepended
-                    output = _maybe_prepend_system_tool_result(
-                        result,
-                        (
-                            result.output
-                            if result.output
-                            else result.error if result.error else ""
-                        ),
-                    )
-
-                    yield {"content": output}
-
-            # Add assistant's response (text and tool uses)
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
-
-            # Add tool results as user message
-            if tool_result_content:
-                messages.append({"role": "user", "content": tool_result_content})
-
-            # If we used a tool, increment the operation counter
-            if used_tool:
-                operation_count += 1
-                if operation_count >= max_operations:
-                    yield {
-                        "content": "Operation limit reached. Waiting for LLM's final status..."
-                    }
-
-            # If no tool was used, the LLM is likely done
-            if not used_tool:
-                return
-
-    except Exception as e:
-        yield {"content": f"Error executing command: {str(e)}"}
-
-
 async def sampling_loop(
     *,
     model: str,
@@ -238,13 +94,12 @@ async def sampling_loop(
 ):
     """
     Agentic sampling loop for the assistant/tool interaction.
-    Preserved for backward compatibility and future enhancements.
-    Currently only supports bash tool.
     """
-    # Initialize bash tool with collection wrapper
-    bash_tool = BashTool()
-    tool_collection = ToolCollection(bash_tool)
-
+    tool_collection = ToolCollection(
+        # ComputerTool(),
+        BashTool(),
+        # EditTool(),
+    )
     system = BetaTextBlockParam(
         type="text",
         text=f"{SYSTEM_PROMPT}{' ' + system_prompt_suffix if system_prompt_suffix else ''}",
@@ -283,6 +138,7 @@ async def sampling_loop(
     )
 
     response = raw_response.parse()
+
     response_params = _response_to_params(response)
     messages.append(
         {
@@ -295,7 +151,10 @@ async def sampling_loop(
     for content_block in response_params:
         output_callback(content_block)
         if content_block["type"] == "tool_use":
-            result = await bash_tool(command=content_block["input"]["command"])
+            result = await tool_collection.run(
+                name=content_block["name"],
+                tool_input=cast(dict[str, Any], content_block["input"]),
+            )
             tool_result_content.append(
                 _make_api_tool_result(result, content_block["id"])
             )
