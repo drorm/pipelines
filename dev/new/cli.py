@@ -8,7 +8,12 @@ import sys
 import asyncio
 import argparse
 from typing import List, Dict
+from pathlib import Path
 
+# Add the current directory to Python path
+sys.path.append(str(Path(__file__).resolve().parent))
+
+# Import the new compute module
 from new_compute import Pipeline
 
 
@@ -34,7 +39,7 @@ async def main(command: str):
     messages = create_mock_messages(command)
 
     # Execute pipeline
-    result = pipeline.pipe(
+    result = await pipeline.pipe(
         user_message=command, model_id="compute-bash", messages=messages, body=body
     )
 
