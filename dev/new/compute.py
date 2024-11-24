@@ -13,12 +13,17 @@ import logging
 import asyncio
 from typing import List, Dict
 from pydantic import BaseModel
+import sys
+from pathlib import Path
+
+# Add the parent directory to Python path
+sys.path.append(str(Path(__file__).resolve().parent))
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from dev.compute.loop import execute_command
+from loop import sampling_loop, APIProvider
 
 
 class Pipeline:
@@ -53,7 +58,7 @@ class Pipeline:
             }
         ]
 
-    def pipe(
+    async def pipe(
         self, user_message: str, model_id: str, messages: List[dict], body: dict
     ) -> str:
         """Execute bash commands through Claude with tool integration."""
@@ -70,6 +75,23 @@ class Pipeline:
             logger.error(error_msg)
             return error_msg
 
+        # Format messages for Claude beta API
+        formatted_messages = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, str):
+                formatted_messages.append(
+                    {"role": role, "content": [{"type": "text", "text": content}]}
+                )
+            else:
+                formatted_messages.append({"role": role, "content": content})
+
+        # Add current user message
+        formatted_messages.append(
+            {"role": "user", "content": [{"type": "text", "text": user_message}]}
+        )
+
         try:
             # Execute command using our enhanced loop
             output_parts = []
@@ -81,24 +103,21 @@ class Pipeline:
 
             async def tool_callback(result, tool_id):
                 if result.system:
-                    output_parts.append(f"<SYSTEM>{result.system}</SYSTEM>")
+                    output_parts.append(f"<s>{result.system}<s>")
 
                     # Run command through execute_command
 
-            async def run_command():
-                async for chunk in execute_command(
-                    command=user_message,
-                    model="claude-3-5-sonnet-20241022",
-                    api_key=self.valves.ANTHROPIC_API_KEY,
-                    messages=messages,  # Pass the message history
-                    output_callback=output_callback,
-                    tool_output_callback=tool_callback,
-                ):
-                    if chunk["content"]:
-                        output_parts.append(chunk["content"])
-
-            # Run the async function synchronously since pipe() is sync
-            asyncio.run(run_command())
+            # Execute the command through sampling_loop
+            updated_messages = await sampling_loop(
+                model="claude-3-5-sonnet-20241022",
+                provider=APIProvider.ANTHROPIC,
+                system_prompt_suffix="",
+                messages=formatted_messages,
+                output_callback=output_callback,
+                tool_output_callback=tool_callback,
+                api_response_callback=lambda req, res, exc: None,  # No-op callback
+                api_key=self.valves.ANTHROPIC_API_KEY,
+            )
 
             # Return collected output
             return (
