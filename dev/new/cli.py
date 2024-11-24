@@ -13,8 +13,7 @@ from pathlib import Path
 # Add the current directory to Python path
 sys.path.append(str(Path(__file__).resolve().parent))
 
-# Import the new compute module
-from new_compute import Pipeline
+from compute import Pipeline
 
 
 def create_mock_body() -> Dict:
