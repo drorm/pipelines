@@ -32,7 +32,6 @@ This file implements the Streamlit-based web interface for the computer use demo
 
 Main UI Setup and Configuration:
 	Implements a chat interface using Streamlit's components
-	Handles API provider selection (Anthropic, Bedrock, Vertex)
 	Manages configuration settings (API keys, model selection, system prompts)
 	Provides image display controls and system prompt customization
 
@@ -120,7 +119,9 @@ Core Implementation:
 	Maintains session state between commands
 	Implements the Anthropic bash tool interface
 
-Key Components: a) _BashSession (Internal Class):
+Key Components:
+
+a) BashSession (Internal Class):
 	Manages the bash process lifecycle
 	Features:
 		Async command execution
@@ -132,11 +133,13 @@ Key Components: a) _BashSession (Internal Class):
 
 b) BashTool (Main Tool Class):
 	Implements BaseAnthropicTool
-	Fixed parameters:
-		name: "bash"
-		type: "bash_20241022"
 	Capabilities:
 		Command execution
 		Session management
 		Restart functionality
 		Resource cleanup
+
+
+# ../compute
+
+I previously ported the project to pipelines in ../compute. The main difference is that I made a lot of changes to loop.py. Now I want to keep loop.py as much as possible as it is and make changes to compute.py.
