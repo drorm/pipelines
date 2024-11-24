@@ -16,14 +16,20 @@ from pydantic import BaseModel
 import sys
 from pathlib import Path
 
-# Add the parent directory to Python path
-sys.path.append(str(Path(__file__).resolve().parent))
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from loop import sampling_loop, APIProvider
+try:
+    from .loop import sampling_loop, APIProvider
+except ImportError:
+    # When loaded directly by the server
+    import sys
+    from pathlib import Path
+
+    sys.path.append(str(Path(__file__).parent))
+    from loop import sampling_loop, APIProvider
 
 
 class Pipeline:
