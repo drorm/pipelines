@@ -51,17 +51,14 @@ class Pipeline:
             }
         ]
 
-    async def pipe(
+    def pipe(
         self, user_message: str, model_id: str, messages: List[dict], body: dict
     ) -> str:
         """Execute bash commands through Claude with tool integration."""
         logger.info(f"pipe called with user_message: {user_message}")
         print(f"pipe called with user_message: {user_message}")
 
-        try:
-            from .loop import sampling_loop, APIProvider
-        except ImportError:
-            from loop import sampling_loop, APIProvider
+        from dev.new.loop import sampling_loop, APIProvider
 
         # Handle title request
         if body.get("title", False):
@@ -73,47 +70,75 @@ class Pipeline:
             logger.error(error_msg)
             return error_msg
 
-        # Format messages for Claude beta API
-        formatted_messages = []
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if isinstance(content, str):
-                formatted_messages.append(
-                    {"role": role, "content": [{"type": "text", "text": content}]}
-                )
-            else:
-                formatted_messages.append({"role": role, "content": content})
-
-        # Add current user message
-        formatted_messages.append(
-            {"role": "user", "content": [{"type": "text", "text": user_message}]}
-        )
-
         try:
-            # Execute command using our enhanced loop
+            # Create a new event loop for this request
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             output_parts = []
 
-            # Define callbacks to collect output
-            async def output_callback(content: Dict):
-                if content["type"] == "text":
-                    output_parts.append(content["text"])
+            async def process_message():
+                # Format current message
+                formatted_messages = []
+                for msg in messages:
+                    role = msg["role"]
+                    content = msg["content"]
+                    if isinstance(content, str):
+                        formatted_messages.append(
+                            {
+                                "role": role,
+                                "content": [{"type": "text", "text": content}],
+                            }
+                        )
+                    else:
+                        formatted_messages.append({"role": role, "content": content})
 
-            async def tool_callback(result, tool_id):
-                if result.system:
-                    output_parts.append(f"<s>{result.system}</s>")
+                # Add current user message
+                formatted_messages.append(
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": user_message}],
+                    }
+                )
 
-            # Execute the command through sampling_loop
-            await sampling_loop(
-                model="claude-3-5-sonnet-20241022",
-                provider=APIProvider.ANTHROPIC,
-                system_prompt_suffix="",
-                messages=formatted_messages,
-                output_callback=output_callback,
-                tool_output_callback=tool_callback,
-                api_response_callback=lambda req, res, exc: None,  # No-op callback
-                api_key=self.valves.ANTHROPIC_API_KEY,
-            )
+                def output_callback(content: Dict):
+                    if content["type"] == "text":
+                        output_parts.append(content["text"])
+
+                def tool_callback(result, tool_id):
+                    logger.info(f"Tool callback received: {result}, {tool_id}")
+                    output_parts.append(f"```{result.output}```")
+                    """
+                    logger.info(f"Tool callback received: {result}, {tool_id}")
+                    # Handle object with attributes
+                    if hasattr(result, 'system'):
+                        output_parts.append(f"<s>{result.system}</s>")
+                    if hasattr(result, 'content'):
+                        output_parts.append(f"<system>{result.content}</system>")
+                    # Handle dictionary
+                    if isinstance(result, dict):
+                        if 'system' in result:
+                            output_parts.append(f"<s>{result['system']}</s>")
+                        if 'content' in result:
+                            output_parts.append(f"<system>{result['content']}</system>")
+                    # Handle string
+                    if isinstance(result, str):
+                        output_parts.append(f"<system>{result}</system>")
+                    """
+
+                await sampling_loop(
+                    model="claude-3-5-sonnet-20241022",
+                    provider=APIProvider.ANTHROPIC,
+                    system_prompt_suffix="",
+                    messages=formatted_messages,
+                    output_callback=output_callback,
+                    tool_output_callback=tool_callback,
+                    api_response_callback=lambda req, res, exc: None,
+                    api_key=self.valves.ANTHROPIC_API_KEY,
+                )
+
+            # Run everything in the event loop
+            loop.run_until_complete(process_message())
+            loop.close()
 
             # Return collected output
             return (
