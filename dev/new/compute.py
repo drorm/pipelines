@@ -106,24 +106,8 @@ class Pipeline:
 
                 def tool_callback(result, tool_id):
                     logger.info(f"Tool callback received: {result}, {tool_id}")
-                    output_parts.append(f"```{result.output}```")
-                    """
-                    logger.info(f"Tool callback received: {result}, {tool_id}")
-                    # Handle object with attributes
-                    if hasattr(result, 'system'):
-                        output_parts.append(f"<s>{result.system}</s>")
-                    if hasattr(result, 'content'):
-                        output_parts.append(f"<system>{result.content}</system>")
-                    # Handle dictionary
-                    if isinstance(result, dict):
-                        if 'system' in result:
-                            output_parts.append(f"<s>{result['system']}</s>")
-                        if 'content' in result:
-                            output_parts.append(f"<system>{result['content']}</system>")
-                    # Handle string
-                    if isinstance(result, str):
-                        output_parts.append(f"<system>{result}</system>")
-                    """
+                    if hasattr(result, "output"):
+                        output_parts.append(f"```{result.output}```")
 
                 await sampling_loop(
                     model="claude-3-5-sonnet-20241022",
