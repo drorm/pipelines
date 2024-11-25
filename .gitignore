@@ -11,4 +11,4 @@ pipelines/*
 .venv
 venv/
 
-dev/compute/valves.json
+valves.json
