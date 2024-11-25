@@ -13,23 +13,10 @@ import logging
 import asyncio
 from typing import List, Dict
 from pydantic import BaseModel
-import sys
-from pathlib import Path
-
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-try:
-    from .loop import sampling_loop, APIProvider
-except ImportError:
-    # When loaded directly by the server
-    import sys
-    from pathlib import Path
-
-    sys.path.append(str(Path(__file__).parent))
-    from loop import sampling_loop, APIProvider
 
 
 class Pipeline:
@@ -71,6 +58,11 @@ class Pipeline:
         logger.info(f"pipe called with user_message: {user_message}")
         print(f"pipe called with user_message: {user_message}")
 
+        try:
+            from .loop import sampling_loop, APIProvider
+        except ImportError:
+            from loop import sampling_loop, APIProvider
+
         # Handle title request
         if body.get("title", False):
             return "Compute Pipeline"
@@ -109,12 +101,10 @@ class Pipeline:
 
             async def tool_callback(result, tool_id):
                 if result.system:
-                    output_parts.append(f"<s>{result.system}<s>")
-
-                    # Run command through execute_command
+                    output_parts.append(f"<s>{result.system}</s>")
 
             # Execute the command through sampling_loop
-            updated_messages = await sampling_loop(
+            await sampling_loop(
                 model="claude-3-5-sonnet-20241022",
                 provider=APIProvider.ANTHROPIC,
                 system_prompt_suffix="",
