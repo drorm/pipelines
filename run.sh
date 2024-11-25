@@ -11,7 +11,7 @@ export WEATHER_API_KEY=`cat ~/.weather`
 cd pipelines
 rm -f failed/*
 rm -f *.py
-ln -s ../dev/compute/compute.py .
+ln -s ../dev/new/compute.py .
 cd ..
 
 ./dev.sh
