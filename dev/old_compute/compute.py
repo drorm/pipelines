@@ -18,6 +18,8 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from dev.compute.loop import execute_command
+
 
 class Pipeline:
     class Valves(BaseModel):
@@ -58,8 +60,6 @@ class Pipeline:
         logger.info(f"pipe called with user_message: {user_message}")
         print(f"pipe called with user_message: {user_message}")
 
-        from dev.new.loop import sampling_loop, APIProvider
-
         # Handle title request
         if body.get("title", False):
             return "Compute Pipeline"
@@ -71,58 +71,34 @@ class Pipeline:
             return error_msg
 
         try:
-            # Create a new event loop for this request
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Execute command using our enhanced loop
             output_parts = []
 
-            async def process_message():
-                # Format current message
-                formatted_messages = []
-                for msg in messages:
-                    role = msg["role"]
-                    content = msg["content"]
-                    if isinstance(content, str):
-                        formatted_messages.append(
-                            {
-                                "role": role,
-                                "content": [{"type": "text", "text": content}],
-                            }
-                        )
-                    else:
-                        formatted_messages.append({"role": role, "content": content})
+            # Define callbacks to collect output
+            async def output_callback(content: Dict):
+                if content["type"] == "text":
+                    output_parts.append(content["text"])
 
-                # Add current user message
-                formatted_messages.append(
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": user_message}],
-                    }
-                )
+            async def tool_callback(result, tool_id):
+                if result.system:
+                    output_parts.append(f"<SYSTEM>{result.system}</SYSTEM>")
 
-                def output_callback(content: Dict):
-                    if content["type"] == "text":
-                        output_parts.append(content["text"])
+                    # Run command through execute_command
 
-                def tool_callback(result, tool_id):
-                    logger.info(f"Tool callback received: {result}, {tool_id}")
-                    if hasattr(result, "output"):
-                        output_parts.append(f"```{result.output}```")
-
-                await sampling_loop(
+            async def run_command():
+                async for chunk in execute_command(
+                    command=user_message,
                     model="claude-3-5-sonnet-20241022",
-                    provider=APIProvider.ANTHROPIC,
-                    system_prompt_suffix="",
-                    messages=formatted_messages,
+                    api_key=self.valves.ANTHROPIC_API_KEY,
+                    messages=messages,  # Pass the message history
                     output_callback=output_callback,
                     tool_output_callback=tool_callback,
-                    api_response_callback=lambda req, res, exc: None,
-                    api_key=self.valves.ANTHROPIC_API_KEY,
-                )
+                ):
+                    if chunk["content"]:
+                        output_parts.append(chunk["content"])
 
-            # Run everything in the event loop
-            loop.run_until_complete(process_message())
-            loop.close()
+            # Run the async function synchronously since pipe() is sync
+            asyncio.run(run_command())
 
             # Return collected output
             return (

@@ -1,20 +1,27 @@
 """
-Agentic sampling loop that calls the Anthropic API and executes bash commands using function calling.
-
-This module implements the core interaction loop between the LLM (Claude) and the bash tool.
-It handles:
-1. Message management and formatting 
-2. Tool execution and result processing
-3. Error handling and response callbacks
+Agentic sampling loop that calls the Anthropic API and local implementation of anthropic-defined computer use tools.
 """
 
+import platform
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Dict, Union, AsyncGenerator
+from enum import StrEnum
+from typing import Any, cast
 
-from anthropic import Anthropic
+import httpx
+from anthropic import (
+    Anthropic,
+    AnthropicBedrock,
+    AnthropicVertex,
+    APIError,
+    APIResponseValidationError,
+    APIStatusError,
+)
 from anthropic.types.beta import (
+    BetaCacheControlEphemeralParam,
     BetaContentBlockParam,
+    BetaImageBlockParam,
+    BetaMessage,
     BetaMessageParam,
     BetaTextBlock,
     BetaTextBlockParam,
@@ -22,19 +29,40 @@ from anthropic.types.beta import (
     BetaToolUseBlockParam,
 )
 
-from .tools.bash import BashTool, ToolResult
+from .tools import BashTool, ComputerTool, EditTool, ToolCollection, ToolResult
 
+COMPUTER_USE_BETA_FLAG = "computer-use-2024-10-22"
+PROMPT_CACHING_BETA_FLAG = "prompt-caching-2024-07-31"
+
+
+class APIProvider(StrEnum):
+    ANTHROPIC = "anthropic"
+    BEDROCK = "bedrock"
+    VERTEX = "vertex"
+
+
+PROVIDER_TO_DEFAULT_MODEL_NAME: dict[APIProvider, str] = {
+    APIProvider.ANTHROPIC: "claude-3-5-sonnet-20241022",
+    APIProvider.BEDROCK: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    APIProvider.VERTEX: "claude-3-5-sonnet-v2@20241022",
+}
+
+
+# This system prompt is optimized for the Docker environment in this repository and
+# specific tool combinations enabled.
+# We encourage modifying this system prompt to ensure the model has context for the
+# environment it is running in, and to provide any additional information that may be
+# helpful for the task at hand.
 SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
-* You are utilizing an Ubuntu virtual machine with bash command execution capabilities
+* You are utilizing an Ubuntu virtual machine using {platform.machine()} architecture with bash command execution capabilities
 * You can execute any valid bash command but do not install packages
 * When using commands that are expected to output very large quantities of text, redirect into a tmp file
 * The current date is {datetime.today().strftime('%A, %B %-d, %Y')}
 </SYSTEM_CAPABILITY>
 
-<IMPORTANT> 
+<IMPORTANT>
 * Only execute valid bash commands
 * Dangerous commands will return an error instead of executing
-* Do not try to use X11/GUI applications
 * For each task, you must either:
   1. Complete the requested goal and indicate success with "TASK COMPLETED: [brief explanation of what was accomplished]"
   2. Determine the goal cannot be achieved and indicate failure with "TASK FAILED: [explanation of why it cannot be done]"
@@ -44,195 +72,226 @@ SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 </IMPORTANT>"""
 
 
-async def execute_command(
+async def sampling_loop(
     *,
-    command: str,
     model: str,
+    provider: APIProvider,
+    system_prompt_suffix: str,
+    messages: list[BetaMessageParam],
+    output_callback: Callable[[BetaContentBlockParam], None],
+    tool_output_callback: Callable[[ToolResult, str], None],
+    api_response_callback: Callable[
+        [httpx.Request, httpx.Response | object | None, Exception | None], None
+    ],
     api_key: str,
-    messages: list[dict] | None = None,
-    output_callback: Callable[[Dict[str, Any]], None] | None = None,
-    tool_output_callback: Callable[[ToolResult, str], None] | None = None,
-) -> AsyncGenerator[Dict[str, str], None]:
+    only_n_most_recent_images: int | None = None,
+    max_tokens: int = 4096,
+):
     """
-    Execute commands through Claude to accomplish a given task, with up to 5 operations.
-
-    Args:
-        command: The task/goal to accomplish
-        model: The Claude model to use
-        api_key: Anthropic API key
-        messages: Optional list of previous message history
-        output_callback: Optional callback for Claude's responses
-        tool_output_callback: Optional callback for tool outputs
-
-    Returns:
-        An async generator yielding chunks of output as {"content": str} dictionaries
+    Agentic sampling loop for the assistant/tool interaction of computer use.
     """
-    # Initialize bash tool
-    bash_tool = BashTool()
-    tool_collection = [bash_tool.to_params()]
+    tool_collection = ToolCollection(
+        # ComputerTool(),
+        BashTool(),
+        # EditTool(),
+    )
+    system = BetaTextBlockParam(
+        type="text",
+        text=f"{SYSTEM_PROMPT}{' ' + system_prompt_suffix if system_prompt_suffix else ''}",
+    )
 
-    # Create Anthropic client
-    client = Anthropic(api_key=api_key)
+    while True:
+        enable_prompt_caching = False
+        betas = [COMPUTER_USE_BETA_FLAG]
+        image_truncation_threshold = 10
+        if provider == APIProvider.ANTHROPIC:
+            client = Anthropic(api_key=api_key)
+            enable_prompt_caching = True
+        elif provider == APIProvider.VERTEX:
+            client = AnthropicVertex()
+        elif provider == APIProvider.BEDROCK:
+            client = AnthropicBedrock()
 
-    # Initialize operation counter
-    operation_count = 0
-    max_operations = 5
+        if enable_prompt_caching:
+            betas.append(PROMPT_CACHING_BETA_FLAG)
+            _inject_prompt_caching(messages)
+            # Is it ever worth it to bust the cache with prompt caching?
+            image_truncation_threshold = 50
+            system["cache_control"] = {"type": "ephemeral"}
 
-    try:
-        # Get Claude's interpretation/validation of the command
-        if messages is None:
-            messages = []
-
-        # Add the initial task to messages
-        messages.append({"role": "user", "content": command})
-
-        while operation_count < max_operations:
-            raw_response = client.beta.messages.create(
-                max_tokens=1024,
-                messages=messages,
-                model=model,
-                system=SYSTEM_PROMPT,
-                tools=tool_collection,
+        if only_n_most_recent_images:
+            _maybe_filter_to_n_most_recent_images(
+                messages,
+                only_n_most_recent_images,
+                min_removal_threshold=image_truncation_threshold,
             )
 
-            response_params = _response_to_params(raw_response)
+        # Call the API
+        # we use raw_response to provide debug information to streamlit. Your
+        # implementation may be able call the SDK directly with:
+        # `response = client.messages.create(...)` instead.
+        try:
+            raw_response = client.beta.messages.with_raw_response.create(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                system=[system],
+                tools=tool_collection.to_params(),
+                betas=betas,
+            )
+        except (APIStatusError, APIResponseValidationError) as e:
+            api_response_callback(e.request, e.response, e)
+            return messages
+        except APIError as e:
+            api_response_callback(e.request, e.body, e)
+            return messages
 
-            # Track if this turn used a tool operation
-            used_tool = False
-            response_content = []  # Collect all content for this turn
+        api_response_callback(
+            raw_response.http_response.request, raw_response.http_response, None
+        )
 
-            # First process and collect assistant's response
-            tool_result_content = []  # Collect tool results for user message
-            assistant_content = []  # Collect text/tool use for assistant message
+        response = raw_response.parse()
 
-            for content_block in response_params:
-                if output_callback:
-                    await output_callback(content_block)
+        response_params = _response_to_params(response)
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response_params,
+            }
+        )
 
-                if content_block["type"] == "text":
-                    text = content_block["text"]
-                    assistant_content.append({"type": "text", "text": text})
-                    yield {"content": text}
+        tool_result_content: list[BetaToolResultBlockParam] = []
+        for content_block in response_params:
+            output_callback(content_block)
+            if content_block["type"] == "tool_use":
+                result = await tool_collection.run(
+                    name=content_block["name"],
+                    tool_input=cast(dict[str, Any], content_block["input"]),
+                )
+                tool_result_content.append(
+                    _make_api_tool_result(result, content_block["id"])
+                )
+                tool_output_callback(result, content_block["id"])
 
-                    # Check for task completion markers
-                    text_lower = text.lower()
-                    if any(
-                        marker in text_lower
-                        for marker in [
-                            "task completed:",
-                            "task failed:",
-                            "operation limit reached:",
-                        ]
-                    ):
-                        if assistant_content:
-                            messages.append(
-                                {"role": "assistant", "content": assistant_content}
-                            )
-                        return
+        if not tool_result_content:
+            return messages
 
-                elif content_block["type"] == "tool_use":
-                    used_tool = True
-                    assistant_content.append(
-                        content_block
-                    )  # Add tool use to assistant message
+        messages.append({"content": tool_result_content, "role": "user"})
 
-                    # Execute the command through the bash tool
-                    result = await bash_tool(command=content_block["input"]["command"])
 
-                    if tool_output_callback:
-                        await tool_output_callback(result, content_block["id"])
+def _maybe_filter_to_n_most_recent_images(
+    messages: list[BetaMessageParam],
+    images_to_keep: int,
+    min_removal_threshold: int,
+):
+    """
+    With the assumption that images are screenshots that are of diminishing value as
+    the conversation progresses, remove all but the final `images_to_keep` tool_result
+    images in place, with a chunk of min_removal_threshold to reduce the amount we
+    break the implicit prompt cache.
+    """
+    if images_to_keep is None:
+        return messages
 
-                    # Process the tool result
-                    tool_result = _make_api_tool_result(result, content_block["id"])
-                    tool_result_content.append(tool_result)  # Collect for user message
+    tool_result_blocks = cast(
+        list[BetaToolResultBlockParam],
+        [
+            item
+            for message in messages
+            for item in (
+                message["content"] if isinstance(message["content"], list) else []
+            )
+            if isinstance(item, dict) and item.get("type") == "tool_result"
+        ],
+    )
 
-                    # Get the output text with any system messages prepended
-                    output = _maybe_prepend_system_tool_result(
-                        result,
-                        (
-                            result.output
-                            if result.output
-                            else result.error if result.error else ""
-                        ),
-                    )
+    total_images = sum(
+        1
+        for tool_result in tool_result_blocks
+        for content in tool_result.get("content", [])
+        if isinstance(content, dict) and content.get("type") == "image"
+    )
 
-                    yield {"content": output}
+    images_to_remove = total_images - images_to_keep
+    # for better cache behavior, we want to remove in chunks
+    images_to_remove -= images_to_remove % min_removal_threshold
 
-            # Add assistant's response (text and tool uses)
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
-
-            # Add tool results as user message
-            if tool_result_content:
-                messages.append({"role": "user", "content": tool_result_content})
-
-            # If we used a tool, increment the operation counter
-            if used_tool:
-                operation_count += 1
-                if operation_count >= max_operations:
-                    yield {
-                        "content": "Operation limit reached. Waiting for LLM's final status..."
-                    }
-
-            # If no tool was used, the LLM is likely done
-            if not used_tool:
-                return
-
-    except Exception as e:
-        yield {"content": f"Error executing command: {str(e)}"}
+    for tool_result in tool_result_blocks:
+        if isinstance(tool_result.get("content"), list):
+            new_content = []
+            for content in tool_result.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "image":
+                    if images_to_remove > 0:
+                        images_to_remove -= 1
+                        continue
+                new_content.append(content)
+            tool_result["content"] = new_content
 
 
 def _response_to_params(
-    response,
+    response: BetaMessage,
 ) -> list[BetaTextBlockParam | BetaToolUseBlockParam]:
-    """
-    Converts a Claude API response into a standardized parameter format.
-
-    Args:
-        response: Raw message response from Claude API call
-
-    Returns:
-        List of formatted content blocks, each either text or tool use parameters
-    """
     res: list[BetaTextBlockParam | BetaToolUseBlockParam] = []
     for block in response.content:
         if isinstance(block, BetaTextBlock):
             res.append({"type": "text", "text": block.text})
         else:
-            res.append(block.model_dump())
+            res.append(cast(BetaToolUseBlockParam, block.model_dump()))
     return res
+
+
+def _inject_prompt_caching(
+    messages: list[BetaMessageParam],
+):
+    """
+    Set cache breakpoints for the 3 most recent turns
+    one cache breakpoint is left for tools/system prompt, to be shared across sessions
+    """
+
+    breakpoints_remaining = 3
+    for message in reversed(messages):
+        if message["role"] == "user" and isinstance(
+            content := message["content"], list
+        ):
+            if breakpoints_remaining:
+                breakpoints_remaining -= 1
+                content[-1]["cache_control"] = BetaCacheControlEphemeralParam(
+                    {"type": "ephemeral"}
+                )
+            else:
+                content[-1].pop("cache_control", None)
+                # we'll only every have one extra turn per loop
+                break
 
 
 def _make_api_tool_result(
     result: ToolResult, tool_use_id: str
 ) -> BetaToolResultBlockParam:
-    """
-    Converts internal tool execution results into Claude API-compatible format.
-
-    Args:
-        result: The tool execution result to format
-        tool_use_id: ID of the tool use block this result responds to
-
-    Returns:
-        Formatted tool result block
-    """
-    tool_result_content = []
+    """Convert an agent ToolResult to an API ToolResultBlockParam."""
+    tool_result_content: list[BetaTextBlockParam | BetaImageBlockParam] | str = []
     is_error = False
-
     if result.error:
         is_error = True
-        output_text = result.error
+        tool_result_content = _maybe_prepend_system_tool_result(result, result.error)
     else:
-        output_text = result.output if result.output else ""
-
-    if output_text:
-        tool_result_content.append(
-            {
-                "type": "text",
-                "text": _maybe_prepend_system_tool_result(result, output_text),
-            }
-        )
-
+        if result.output:
+            tool_result_content.append(
+                {
+                    "type": "text",
+                    "text": _maybe_prepend_system_tool_result(result, result.output),
+                }
+            )
+        if result.base64_image:
+            tool_result_content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": result.base64_image,
+                    },
+                }
+            )
     return {
         "type": "tool_result",
         "content": tool_result_content,
@@ -241,45 +300,7 @@ def _make_api_tool_result(
     }
 
 
-def _maybe_prepend_system_tool_result(result: ToolResult, result_text: str) -> str:
-    """
-    Prepends any system messages to tool output text.
-
-    Args:
-        result: The tool execution result
-        result_text: The raw output/error text from the tool
-
-    Returns:
-        Text with any system messages prepended
-    """
-    if not result_text:
-        return ""
-
+def _maybe_prepend_system_tool_result(result: ToolResult, result_text: str):
     if result.system:
-        return f"<s>{result.system}</s>\n\n{format_tool_output(result)}"
-    return format_tool_output(result)
-
-
-def format_tool_output(result: ToolResult) -> str:
-    """
-    Format the tool output appropriately based on whether it's output or error.
-
-    Args:
-        result: The tool execution result
-
-    Returns:
-        Formatted string with output/error
-    """
-    # If we have both output and error, format accordingly
-    if result.output and result.error:
-        return f"```\n{result.output}\n```\n{result.error}"
-
-    # If we only have error, return it as plain text
-    if result.error:
-        return result.error
-
-    # If we only have output, wrap it in code blocks
-    if result.output:
-        return f"```\n{result.output}\n```"
-
-    return ""
+        result_text = f"<system>{result.system}</system>\n{result_text}"
+    return result_text
