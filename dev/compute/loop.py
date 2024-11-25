@@ -63,9 +63,6 @@ SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
 <IMPORTANT>
 * Only execute valid bash commands
 * Dangerous commands will return an error instead of executing
-* For each task, you must either:
-  1. Complete the requested goal and indicate success with "TASK COMPLETED: [brief explanation of what was accomplished]"
-  2. Determine the goal cannot be achieved and indicate failure with "TASK FAILED: [explanation of why it cannot be done]"
 * You have a maximum of 5 operations to complete each task
 * Each command execution counts as one operation
 * If you reach the operation limit without completing the task, respond with "OPERATION LIMIT REACHED: [current status and what remains to be done]"
