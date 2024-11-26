@@ -108,11 +108,19 @@ class Pipeline:
             asyncio.set_event_loop(loop)
 
             async def process_message():
-                # Format current message
+                # Extract system message and format messages
                 formatted_messages = []
+                system_prompt_suffix = ""
+
                 for msg in messages:
                     role = msg["role"]
                     content = msg["content"]
+
+                    # Extract system message
+                    if role == "system" and isinstance(content, str):
+                        system_prompt_suffix = content
+                        continue
+
                     if isinstance(content, str):
                         formatted_messages.append(
                             {
@@ -170,7 +178,7 @@ class Pipeline:
                     sampling_loop(
                         model="claude-3-5-sonnet-20241022",
                         provider=APIProvider.ANTHROPIC,
-                        system_prompt_suffix="",
+                        system_prompt_suffix=system_prompt_suffix,
                         messages=formatted_messages,
                         output_callback=ctx.output_callback,
                         tool_output_callback=ctx.tool_callback,
