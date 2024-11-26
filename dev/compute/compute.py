@@ -29,8 +29,9 @@ class Pipeline:
         self.id = "compute"
         logger.debug(f"#### Initializing {self.name} pipeline")
 
-        # Initialize valves
-        self.valves = self.Valves(ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", ""))
+        self.valves = self.Valves(
+            ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", ""),
+        )
 
     async def on_startup(self):
         print(f"on_startup:{__name__}")
@@ -56,7 +57,7 @@ class Pipeline:
     ) -> str:
         """Execute bash commands through Claude with tool integration."""
         logger.info(f"pipe called with user_message: {user_message}")
-        print(f"pipe called with user_message: {user_message}")
+        print(f"compute called with user_message: {user_message}")
 
         from dev.compute.loop import sampling_loop, APIProvider
 
@@ -106,8 +107,18 @@ class Pipeline:
 
                 def tool_callback(result, tool_id):
                     logger.info(f"Tool callback received: {result}, {tool_id}")
-                    if hasattr(result, "output"):
-                        output_parts.append(f"```{result.output}```")
+                    print(f"Tool callback received: {result}, {tool_id}")
+
+                    # Handle error output
+                    if hasattr(result, "error") and result.error:
+                        if hasattr(result, "exit_code") and result.exit_code:
+                            output_parts.append(f"Exit code: {result.exit_code}")
+                        # Errors are shown as plaintext
+                        output_parts.append(f"plaintext\n{result.error}\n")
+
+                    # Handle command output
+                    if hasattr(result, "output") and result.output:
+                        output_parts.append(f"\n```{result.output}\n```")
 
                 await sampling_loop(
                     model="claude-3-5-sonnet-20241022",
