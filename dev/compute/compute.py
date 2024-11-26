@@ -13,6 +13,8 @@ import logging
 import asyncio
 from typing import List, Dict, Union, Generator, Iterator
 from pydantic import BaseModel
+from pygments.lexers import guess_lexer
+from pygments.util import ClassNotFound
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -27,6 +29,26 @@ stream_handler.setFormatter(log_format)
 
 # Add handlers to the logger
 logger.addHandler(stream_handler)
+
+
+def detect_code_fence(code_snippet: str) -> str:
+    """
+    Detect the language of a code snippet and wrap it in appropriate code fences.
+
+    Args:
+        code_snippet: The code or text to analyze
+
+    Returns:
+        The input wrapped in language-specific code fences
+    """
+    if not code_snippet.strip():
+        return "\n```\n\n```\n"
+
+    try:
+        lexer = guess_lexer(code_snippet.strip())
+        return f"\n```{lexer.name.lower()}\n{code_snippet}\n```\n"
+    except ClassNotFound:
+        return f"\n```plain\n{code_snippet}\n```\n"
 
 
 class Pipeline:
@@ -127,9 +149,9 @@ class Pipeline:
                         if hasattr(result, "error") and result.error:
                             if hasattr(result, "exit_code") and result.exit_code:
                                 outputs.append(f"Exit code: {result.exit_code}")
-                            outputs.append(f"plaintext\n{result.error}\n")
+                            outputs.append(detect_code_fence(result.error))
                         if hasattr(result, "output") and result.output:
-                            outputs.append(f"\n```{result.output}\n```\n")
+                            outputs.append(f"\n{detect_code_fence(result.output)}")
 
                         logger.info(f"Tool callback queueing outputs: {outputs}")
                         for output in outputs:
