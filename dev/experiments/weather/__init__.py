@@ -1,3 +1,0 @@
-"""
-Weather pipeline package
-"""
