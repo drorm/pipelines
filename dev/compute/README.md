@@ -8,14 +8,12 @@ The Compute Pipeline is an Open WebUI Pipeline implementation that provides comm
 
 Core dependencies:
 - Python 3.11+
-- Pydantic
-- FastAPI
-- asyncio
-- Pygments (for automatic code language detection and syntax highlighting)
+- OpenWebUI Pipelines
+- Other dependencies as specified in requirements.txt
 
-To install Pygments:
+To install dependencies:
 ```bash
-pip install pygments
+pip install -r requirements.txt
 ```
 
 ## Project Structure
@@ -51,14 +49,6 @@ Core agent loop implementation that:
 - Implements prompt caching and optimization
 - Provides robust error handling
 
-### tools/bash.py
-
-Bash tool implementation providing:
-- Persistent bash shell sessions
-- Async command execution
-- Output/error capture with syntax highlighting
-- Session state management
-- Proper resource cleanup
 
 ## Features
 
@@ -83,7 +73,7 @@ Bash tool implementation providing:
   - Exit status reporting
 
 - Model Support
-  - Currently using Claude 3 Sonnet
+  - Currently using Claude 3.5 Sonnet
   - Extensible to other API providers
 
 ## Usage
