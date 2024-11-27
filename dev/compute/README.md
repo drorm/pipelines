@@ -61,13 +61,29 @@ Bash tool implementation providing:
 
 ## Features
 
-- OpenAI API compatibility
-- Streaming support
-- Automatic code language detection
-- Syntax-highlighted output
-- Persistent bash sessions
-- Robust error handling
-- Detailed logging
+### Core Features
+- System prompt handling through message history
+  - Extracts and applies system prompts from conversation context
+  - Preserves system instructions across interactions
+
+- Code Output Processing
+  - Automatic programming language detection
+  - Smart code fence wrapping (\`\`\`language)
+  - Fallback to plain text for unknown content
+
+- Streaming Support
+  - Real-time response streaming
+  - Async queue-based implementation
+  - Support for both streaming and single-response modes
+
+- Tool Integration
+  - Structured tool output handling
+  - Error code and message capture
+  - Exit status reporting
+
+- Model Support
+  - Currently using Claude 3 Sonnet
+  - Extensible to other API providers
 
 ## Usage
 
