@@ -1,5 +1,6 @@
 """Collection classes for managing multiple tools."""
 
+import asyncio
 from typing import Any
 
 from anthropic.types.beta import BetaToolUnionParam
@@ -29,6 +30,8 @@ class ToolCollection:
         if not tool:
             return ToolFailure(error=f"Tool {name} is invalid")
         try:
+            # All tools are called with await since their __call__ methods are async
+            # The tools themselves handle sync/async internally
             return await tool(**tool_input)
         except ToolError as e:
             return ToolFailure(error=e.message)

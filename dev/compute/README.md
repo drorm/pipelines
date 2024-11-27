@@ -10,6 +10,7 @@ Core dependencies:
 - Python 3.11+
 - Pydantic
 - FastAPI
+- asyncio
 - Pygments (for automatic code language detection and syntax highlighting)
 
 To install Pygments:

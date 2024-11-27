@@ -54,10 +54,12 @@ PROVIDER_TO_DEFAULT_MODEL_NAME: dict[APIProvider, str] = {
 # environment it is running in, and to provide any additional information that may be
 # helpful for the task at hand.
 SYSTEM_PROMPT = f"""<SYSTEM_CAPABILITY>
-* You are utilizing an Ubuntu virtual machine using {platform.machine()} architecture with bash command execution capabilities
+* You are utilising an Ubuntu virtual machine using {platform.machine()} architecture with bash command execution capabilities
 * You can execute any valid bash command but do not install packages
 * When using commands that are expected to output very large quantities of text, redirect into a tmp file
 * The current date is {datetime.today().strftime('%A, %B %-d, %Y')}
+* When using your bash tool with commands that are expected to output very large quantities of text, redirect into a tmp file and use str_replace_editor or `grep -n -B <lines before> -A <lines after> <query> <filename>` to confirm output.
+* When viewing a page it can be helpful to zoom out so that you can see everything on the page.  Either that, or make sure you scroll down to see everything before deciding something isn't available.
 </SYSTEM_CAPABILITY>
 
 <IMPORTANT>
@@ -90,7 +92,7 @@ async def sampling_loop(
     tool_collection = ToolCollection(
         # ComputerTool(),
         BashTool(),
-        # EditTool(),
+        EditTool(),
     )
     system = BetaTextBlockParam(
         type="text",
