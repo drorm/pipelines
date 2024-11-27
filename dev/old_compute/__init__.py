@@ -1,3 +1,0 @@
-"""
-Compute Pipeline package
-"""
