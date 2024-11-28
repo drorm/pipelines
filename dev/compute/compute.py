@@ -29,6 +29,7 @@ stream_handler.setFormatter(log_format)
 
 # Add handlers to the logger
 logger.addHandler(stream_handler)
+logger.propagate = False
 
 
 def detect_code_fence(code_snippet: str) -> str:
@@ -59,20 +60,20 @@ class Pipeline:
         self.name = "Compute Pipeline"
         self.type = "manifold"
         self.id = "compute"
-        logger.debug(f"#### Initializing {self.name} pipeline")
+        logger.info(f"#### Initializing {self.name} pipeline")
 
         self.valves = self.Valves(
             ANTHROPIC_API_KEY=os.getenv("ANTHROPIC_API_KEY", ""),
         )
 
     async def on_startup(self):
-        logger.info(f"on_startup:{__name__}")
+        logger.debug(f"on_startup:{__name__}")
 
     async def on_shutdown(self):
-        logger.info(f"on_shutdown:{__name__}")
+        logger.debug(f"on_shutdown:{__name__}")
 
     async def on_valves_updated(self):
-        logger.info(f"on_valves_updated:{__name__}")
+        logger.debug(f"on_valves_updated:{__name__}")
 
     def pipelines(self) -> List[dict]:
         """Return list of supported models/pipelines"""
@@ -142,16 +143,16 @@ class Pipeline:
                 class StreamingContext:
                     def __init__(self):
                         self._queue = asyncio.Queue()
-                        logger.info("StreamingContext initialized")
+                        logger.debug("StreamingContext initialized")
 
                     def output_callback(self, content: Dict):
-                        logger.info(f"Output callback received: {content}")
+                        logger.debug(f"Output callback received: {content}")
                         if content["type"] == "text":
                             logger.info(f"Queueing text: {content['text']}")
                             self._queue.put_nowait(content["text"])
 
                     def tool_callback(self, result, tool_id):
-                        logger.info(f"Tool callback received: {result}, {tool_id}")
+                        logger.debug(f"Tool callback received: {result}, {tool_id}")
 
                         outputs = []
                         if hasattr(result, "error") and result.error:
@@ -161,7 +162,9 @@ class Pipeline:
                         if hasattr(result, "output") and result.output:
                             outputs.append(f"\n{detect_code_fence(result.output)}")
 
-                        logger.info(f"Tool callback queueing outputs: {outputs}")
+                        logger.info("Tool callback queueing outputs:")
+                        for i, output in enumerate(outputs, 1):
+                            logger.info(f"Output {i}:\n{output}")
                         for output in outputs:
                             self._queue.put_nowait(output)
 
@@ -209,36 +212,36 @@ class Pipeline:
                         logger.error(f"Error completing task: {e}")
 
             async def run_generator():
-                logger.info("Starting generator")
+                logger.debug("Starting generator")
                 async for msg in process_message():
-                    logger.info(f"Generated message: {msg}")
+                    logger.debug(f"Generated message: {msg}")
                     yield msg
-                logger.info("Generator completed")
+                logger.debug("Generator completed")
 
             if body.get("stream", False):
-                logger.info("Streaming mode enabled")
+                logger.debug("Streaming mode enabled")
 
                 def sync_generator():
                     async_gen = run_generator()
                     while True:
                         try:
                             item = loop.run_until_complete(async_gen.__anext__())
-                            logger.info(f"Streaming item: {item}")
+                            logger.debug(f"Streaming item: {item}")
                             yield item
                         except StopAsyncIteration:
-                            logger.info("Streaming complete")
+                            logger.debug("Streaming complete")
                             break
                     loop.close()
 
                 return sync_generator()
             else:
                 # For non-streaming, collect all output and return as string
-                logger.info("Non-streaming mode")
+                logger.debug("Non-streaming mode")
                 output_parts = []
 
                 async def collect_output():
                     async for msg in run_generator():
-                        logger.info(f"Collecting message: {msg}")
+                        logger.debug(f"Collecting message: {msg}")
                         output_parts.append(msg)
 
                 loop.run_until_complete(collect_output())
@@ -248,7 +251,7 @@ class Pipeline:
                     if output_parts
                     else "Command executed successfully"
                 )
-                logger.info(f"Non-streaming result: {result}")
+                logger.debug(f"Non-streaming result: {result}")
                 return result
 
         except Exception as e:
