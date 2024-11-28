@@ -7,11 +7,18 @@ Usage: ./cli.py "your command here"
 import sys
 import asyncio
 import argparse
+import os
 from typing import List, Dict
 from pathlib import Path
 
+# Add parent directory to Python path when running as script
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from .compute import Pipeline
+try:
+    from .compute import Pipeline  # Try relative import first
+except ImportError:
+    from compute import Pipeline  # Fallback to direct import
 
 
 def create_mock_body() -> Dict:
@@ -36,11 +43,13 @@ async def main(command: str):
     messages = create_mock_messages(command)
 
     # Execute pipeline
-    result = await pipeline.pipe(
+    result = pipeline.pipe(
         user_message=command, model_id="compute-bash", messages=messages, body=body
     )
 
-    print(result)
+    # Print each message in the stream
+    for msg in result:
+        print(msg, end="", flush=True)
 
 
 if __name__ == "__main__":
