@@ -10,7 +10,9 @@ environment_variables: ANTHROPIC_API_KEY
 
 import os
 import logging
+import threading
 import asyncio
+import queue
 from typing import List, Dict, Union, Generator, Iterator
 from pydantic import BaseModel
 from pygments.lexers import guess_lexer
@@ -104,148 +106,109 @@ class Pipeline:
             return error_msg
 
         try:
-            # Create a new event loop for this request
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Extract system message and format messages
+            formatted_messages = []
+            system_prompt_suffix = ""
 
-            async def process_message():
-                # Extract system message and format messages
-                formatted_messages = []
-                system_prompt_suffix = ""
+            for msg in messages:
+                role = msg["role"]
+                content = msg["content"]
 
-                for msg in messages:
-                    role = msg["role"]
-                    content = msg["content"]
+                # Extract system message
+                if role == "system" and isinstance(content, str):
+                    system_prompt_suffix = content
+                    continue
 
-                    # Extract system message
-                    if role == "system" and isinstance(content, str):
-                        system_prompt_suffix = content
-                        continue
-
-                    if isinstance(content, str):
-                        formatted_messages.append(
-                            {
-                                "role": role,
-                                "content": [{"type": "text", "text": content}],
-                            }
-                        )
-                    else:
-                        formatted_messages.append({"role": role, "content": content})
-
-                # Add current user message
-                formatted_messages.append(
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": user_message}],
-                    }
-                )
-
-                class StreamingContext:
-                    def __init__(self):
-                        self._queue = asyncio.Queue()
-                        logger.debug("StreamingContext initialized")
-
-                    def output_callback(self, content: Dict):
-                        logger.debug(f"Output callback received: {content}")
-                        if content["type"] == "text":
-                            logger.info(f"Queueing text: {content['text']}")
-                            self._queue.put_nowait(content["text"])
-
-                    def tool_callback(self, result, tool_id):
-                        logger.debug(f"Tool callback received: {result}, {tool_id}")
-
-                        outputs = []
-                        if hasattr(result, "error") and result.error:
-                            if hasattr(result, "exit_code") and result.exit_code:
-                                outputs.append(f"Exit code: {result.exit_code}")
-                            outputs.append(detect_code_fence(result.error))
-                        if hasattr(result, "output") and result.output:
-                            outputs.append(f"\n{detect_code_fence(result.output)}")
-
-                        logger.info("Tool callback queueing outputs:")
-                        for i, output in enumerate(outputs, 1):
-                            logger.info(f"Output {i}:\n{output}")
-                        for output in outputs:
-                            self._queue.put_nowait(output)
-
-                    async def get(self):
-                        try:
-                            return await self._queue.get()
-                        except asyncio.CancelledError:
-                            return None
-
-                ctx = StreamingContext()
-
-                # Start the sampling loop in the background
-                task = asyncio.create_task(
-                    sampling_loop(
-                        model="claude-3-5-sonnet-20241022",
-                        provider=APIProvider.ANTHROPIC,
-                        system_prompt_suffix=system_prompt_suffix,
-                        messages=formatted_messages,
-                        output_callback=ctx.output_callback,
-                        tool_output_callback=ctx.tool_callback,
-                        api_response_callback=lambda req, res, exc: None,
-                        api_key=self.valves.ANTHROPIC_API_KEY,
+                if isinstance(content, str):
+                    formatted_messages.append(
+                        {
+                            "role": role,
+                            "content": [{"type": "text", "text": content}],
+                        }
                     )
-                )
+                else:
+                    formatted_messages.append({"role": role, "content": content})
 
-                try:
-                    while not task.done() or not ctx._queue.empty():
-                        try:
-                            output = await asyncio.wait_for(ctx.get(), timeout=0.1)
-                            if output:
-                                yield output
-                        except asyncio.TimeoutError:
-                            # No output available, check if task is done
-                            continue
-                        except Exception as e:
-                            logger.error(f"Error getting output: {e}")
-                            break
-                finally:
-                    # Make sure we complete the task
-                    if not task.done():
-                        task.cancel()
+            # Add current user message
+            formatted_messages.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": user_message}],
+                }
+            )
+
+            def generate_responses():
+                output_queue = queue.Queue()
+                loop_done = threading.Event()
+
+                def output_callback(content: Dict):
+                    if content["type"] == "text":
+                        logger.info(f"Queueing text: {content['text']}")
+                        output_queue.put(content["text"])
+
+                def tool_callback(result, tool_id):
+                    outputs = []
+                    if hasattr(result, "error") and result.error:
+                        if hasattr(result, "exit_code") and result.exit_code:
+                            outputs.append(f"Exit code: {result.exit_code}")
+                        outputs.append(detect_code_fence(result.error))
+                    if hasattr(result, "output") and result.output:
+                        outputs.append(f"\n{detect_code_fence(result.output)}")
+
+                    logger.info("Tool callback queueing outputs:")
+                    for i, output in enumerate(outputs, 1):
+                        logger.info(f"Output {i}:\n{output}")
+                    for output in outputs:
+                        output_queue.put(output)
+
+                def run_loop():
                     try:
-                        await task
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(
+                            sampling_loop(
+                                model="claude-3-5-sonnet-20241022",
+                                provider=APIProvider.ANTHROPIC,
+                                system_prompt_suffix=system_prompt_suffix,
+                                messages=formatted_messages,
+                                output_callback=output_callback,
+                                tool_output_callback=tool_callback,
+                                api_response_callback=lambda req, res, exc: None,
+                                api_key=self.valves.ANTHROPIC_API_KEY,
+                            )
+                        )
                     except Exception as e:
-                        logger.error(f"Error completing task: {e}")
+                        logger.error(f"Error in sampling loop: {e}")
+                    finally:
+                        loop_done.set()
+                        loop.close()
 
-            async def run_generator():
-                logger.debug("Starting generator")
-                async for msg in process_message():
-                    logger.debug(f"Generated message: {msg}")
-                    yield msg
-                logger.debug("Generator completed")
+                # Start the sampling loop in a separate thread
+                thread = threading.Thread(target=run_loop)
+                thread.start()
+
+                # Yield responses as they come in
+                while not loop_done.is_set() or not output_queue.empty():
+                    try:
+                        output = output_queue.get(timeout=0.1)
+                        yield output
+                    except queue.Empty:
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error getting output: {e}")
+                        break
+
+                thread.join()
 
             if body.get("stream", False):
-                logger.debug("Streaming mode enabled")
-
-                def sync_generator():
-                    async_gen = run_generator()
-                    while True:
-                        try:
-                            item = loop.run_until_complete(async_gen.__anext__())
-                            logger.debug(f"Streaming item: {item}")
-                            yield item
-                        except StopAsyncIteration:
-                            logger.debug("Streaming complete")
-                            break
-                    loop.close()
-
-                return sync_generator()
+                logger.info("Streaming mode enabled")
+                return generate_responses()
             else:
                 # For non-streaming, collect all output and return as string
-                logger.debug("Non-streaming mode")
+                logger.info("Non-streaming mode")
                 output_parts = []
-
-                async def collect_output():
-                    async for msg in run_generator():
-                        logger.debug(f"Collecting message: {msg}")
-                        output_parts.append(msg)
-
-                loop.run_until_complete(collect_output())
-                loop.close()
+                for msg in generate_responses():
+                    output_parts.append(msg)
                 result = (
                     "\n".join(output_parts)
                     if output_parts
